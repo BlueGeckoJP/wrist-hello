@@ -5,5 +5,7 @@ edition = "2024"
 
 [dependencies]
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
+ed25519-dalek = "2.2.0"
 eyre = "0.6.12"
+rand = { version = "0.10.0", features = ["thread_rng"] }
 tokio = { version = "1.50.0", features = ["full"] }
