@@ -580,6 +580,8 @@ dependencies = [
  "ed25519-dalek",
  "eyre",
  "rand",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
