@@ -17,6 +17,7 @@ fn main() {
         .allowlist_type("ElapsedStatus")
         .allowlist_function("socket_payload_deserialize")
         .allowlist_function("socket_payload_serialize")
+        .prepend_enum_name(false)
         .generate()
         .expect("Unable to generate bindings");
 
