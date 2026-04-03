@@ -1,3 +1,7 @@
+mod bindings {
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
+
 use std::{
     sync::{
         Arc, RwLock,
@@ -15,30 +19,15 @@ use bluer::{
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::RngExt;
-use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWriteExt, net::UnixListener};
+
+use crate::bindings::ElapsedStatus_STATUS_EXPIRED;
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
 const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6ce566a0a);
 
 const SOCKET_PATH: &'static str = "/run/wrist-hello/auth.sock";
-
-#[derive(Serialize, Deserialize)]
-struct SocketJsonObj {
-    status: ElapsedStatus,
-    elapsed: Option<u64>,
-    error_reason: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum ElapsedStatus {
-    Unverified,
-    Verified,
-    Expired,
-    Error,
-}
 
 #[tokio::main]
 async fn main() -> bluer::Result<()> {
@@ -227,32 +216,31 @@ async fn start_socket_server(last_verified_at: Arc<AtomicU64>) -> eyre::Result<(
                             Ok(duration) => {
                                 let elapsed = duration.as_secs().saturating_sub(last_verified_at);
                                 match elapsed {
-                                    0 => SocketJsonObj {
-                                        status: ElapsedStatus::Unverified,
-                                        elapsed: None,
-                                        error_reason: None,
+                                    0 => bindings::SocketPayload {
+                                        status: bindings::ElapsedStatus_STATUS_UNVERIFIED,
+                                        has_elapsed: 0,
+                                        elapsed: 0,
                                     },
-                                    elapsed if elapsed <= 30 => SocketJsonObj {
-                                        status: ElapsedStatus::Verified,
-                                        elapsed: Some(elapsed),
-                                        error_reason: None,
+                                    elapsed if elapsed <= 30 => bindings::SocketPayload {
+                                        status: bindings::ElapsedStatus_STATUS_VERIFIED,
+                                        has_elapsed: 1,
+                                        elapsed,
                                     },
-                                    elapsed => SocketJsonObj {
-                                        status: ElapsedStatus::Expired,
-                                        elapsed: Some(elapsed),
-                                        error_reason: None,
+                                    elapsed => bindings::SocketPayload {
+                                        status: ElapsedStatus_STATUS_EXPIRED,
+                                        has_elapsed: 1,
+                                        elapsed,
                                     },
                                 }
                             }
-                            Err(e) => SocketJsonObj {
-                                status: ElapsedStatus::Error,
-                                elapsed: None,
-                                error_reason: Some(format!("System clock error: {}", e)),
+                            Err(e) => bindings::SocketPayload {
+                                status: bindings::ElapsedStatus_STATUS_ERROR,
+                                has_elapsed: 0,
+                                elapsed: 0,
                             },
                         }
                     };
-                    let response_json = serde_json::to_string(&response).unwrap();
-                    if let Err(e) = stream.write_all(response_json.as_bytes()).await {
+                    if let Err(e) = stream.write_all().await {
                         println!("Error writing to socket: {}", e);
                     }
                     if let Err(e) = stream.flush().await {

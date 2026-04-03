@@ -1,23 +1,6 @@
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+#include "common.h"
+
 #include <string.h>
-
-#define SOCKET_PAYLOAD_SIZE 10  // 1 + 1 + 8
-
-typedef uint8_t ElapsedStatus;
-#define STATUS_UNVERIFIED ((ElapsedStatus)1)
-#define STATUS_VERIFIED ((ElapsedStatus)2)
-#define STATUS_EXPIRED ((ElapsedStatus)3)
-#define STATUS_ERROR ((ElapsedStatus)4)
-
-typedef struct {
-    uint8_t status;       // 1 byte = uint8_t = ElapsedStatus
-    uint8_t has_elapsed;  // 1 byte = uint8_t
-    // NOTE: No endianness conversion is applied because this payload is only
-    // exchanged within the same process/machine (C <-> Rust FFI)
-    uint64_t elapsed;  // 8 bytes = uint64_t
-} SocketPayload;
 
 // raw data to structure
 bool socket_payload_deserialize(const uint8_t* payload, size_t payload_len, SocketPayload* out) {
