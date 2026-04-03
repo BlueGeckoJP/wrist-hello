@@ -1,0 +1,5 @@
+*.o
+*.a
+*.d
+*.so
+compile_commands.json

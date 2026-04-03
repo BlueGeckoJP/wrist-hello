@@ -1,0 +1,4 @@
+CompileFlags:
+    Add:
+        - -I../common
+        - -std=c11
