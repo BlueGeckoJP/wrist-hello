@@ -27,7 +27,7 @@ const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef82
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
 const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6ce566a0a);
 
-const SOCKET_PATH: &'static str = "/run/wrist-hello/auth.sock";
+const SOCKET_PATH: &str = "/run/wrist-hello/auth.sock";
 
 #[tokio::main]
 async fn main() -> bluer::Result<()> {
@@ -233,14 +233,22 @@ async fn start_socket_server(last_verified_at: Arc<AtomicU64>) -> eyre::Result<(
                                     },
                                 }
                             }
-                            Err(e) => bindings::SocketPayload {
+                            Err(_) => bindings::SocketPayload {
                                 status: bindings::ElapsedStatus_STATUS_ERROR,
                                 has_elapsed: 0,
                                 elapsed: 0,
                             },
                         }
                     };
-                    if let Err(e) = stream.write_all().await {
+                    let mut raw_buffer = vec![0u8; 10];
+                    unsafe {
+                        bindings::socket_payload_serialize(
+                            &response,
+                            raw_buffer.as_mut_ptr(),
+                            raw_buffer.len(),
+                        );
+                    }
+                    if let Err(e) = stream.write_all(&raw_buffer).await {
                         println!("Error writing to socket: {}", e);
                     }
                     if let Err(e) = stream.flush().await {
