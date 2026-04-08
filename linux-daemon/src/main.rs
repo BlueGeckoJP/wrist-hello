@@ -48,7 +48,8 @@ async fn main() -> bluer::Result<()> {
         uuid: CHALLENGE_CHAR_UUID,
         read: Some(CharacteristicRead {
             read: true,
-            fun: Box::new(move |_req| {
+            fun: Box::new(move |req| {
+                println!("CHALLENGE_CHAR:READ: Connected from {}", req.device_address);
                 let state = challenge_read.clone();
                 Box::pin(async move {
                     let new_challenge = {
@@ -98,7 +99,8 @@ async fn main() -> bluer::Result<()> {
         write: Some(CharacteristicWrite {
             write: true,
             write_without_response: true,
-            method: CharacteristicWriteMethod::Fun(Box::new(move |new_value, _req| {
+            method: CharacteristicWriteMethod::Fun(Box::new(move |new_value, req| {
+                println!("RESPONSE_CHAR:WRITE: Connected from {}", req.device_address);
                 let state = challenge_verify.clone();
                 let last_verified_at_verify = last_verified_at_verify.clone();
                 Box::pin(async move {
