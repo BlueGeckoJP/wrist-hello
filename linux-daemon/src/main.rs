@@ -17,7 +17,11 @@ use bluer::{
         CharacteristicRead, CharacteristicWrite, CharacteristicWriteMethod, ReqError, Service,
     },
 };
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ecdsa::signature::Verifier;
+use p256::{
+    ecdsa::{Signature, VerifyingKey},
+    pkcs8::DecodePublicKey,
+};
 use rand::RngExt;
 use tokio::{io::AsyncWriteExt, net::UnixListener};
 
@@ -104,20 +108,17 @@ async fn main() -> bluer::Result<()> {
                 let state = challenge_verify.clone();
                 let last_verified_at_verify = last_verified_at_verify.clone();
                 Box::pin(async move {
-                    if new_value.len() != 64 {
-                        println!("Error: The signature length is not 64");
-                        return Err(ReqError::InvalidValueLength);
-                    }
-
                     let challenge = {
                         let locked = state.read().unwrap();
                         locked.clone()
                     };
 
                     // TODO: Replace it with actual key
-                    let public_key_bytes = [0u8; 32];
+                    // Public key bytes
+                    let verifying_key_der = hex::decode("<ACTUAL_PUB_KEY_DER>").unwrap();
 
-                    let verifying_key = match VerifyingKey::from_bytes(&public_key_bytes) {
+                    let verifying_key = match VerifyingKey::from_public_key_der(&verifying_key_der)
+                    {
                         Ok(key) => key,
                         Err(_) => {
                             println!("Error: Invalid public key");
@@ -125,14 +126,13 @@ async fn main() -> bluer::Result<()> {
                         }
                     };
 
-                    let signature_bytes: [u8; 64] = match new_value.try_into() {
-                        Ok(bytes) => bytes,
+                    let signature = match Signature::from_der(&new_value) {
+                        Ok(sig) => sig,
                         Err(_) => {
                             println!("Error: Invalid signature");
-                            return Err(ReqError::InvalidValueLength);
+                            return Err(ReqError::Failed);
                         }
                     };
-                    let signature = Signature::from_bytes(&signature_bytes);
 
                     match verifying_key.verify(&challenge, &signature) {
                         Ok(_) => {

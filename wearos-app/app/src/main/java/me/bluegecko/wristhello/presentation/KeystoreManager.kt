@@ -6,21 +6,23 @@ import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.Signature
+import java.security.spec.ECGenParameterSpec
 
 class KeystoreManager {
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-    private val alias = "pc_unlock_ed25519_key"
+    private val alias = "pc_unlock_ecdsa_key"
 
     fun hasKey(): Boolean = keyStore.containsAlias(alias)
 
     fun getOrGenerateRawPublicKey(): ByteArray {
         if (!hasKey()) {
-            val kpg = KeyPairGenerator.getInstance("Ed25519", "AndroidKeyStore")
+            val kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
             val spec = KeyGenParameterSpec.Builder(
                 alias,
                 KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
             )
-                .setDigests(KeyProperties.DIGEST_NONE)
+                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
                 .build()
             kpg.initialize(spec)
             kpg.generateKeyPair()
@@ -29,13 +31,12 @@ class KeystoreManager {
         val certificate = keyStore.getCertificate(alias)
         val publicKey = certificate.publicKey
 
-        // Remove X.509 ASN.1 Header (12 bytes)
-        return publicKey.encoded.copyOfRange(12, 44)
+        return publicKey.encoded
     }
 
     fun signChallenge(challenge: ByteArray): ByteArray? {
         val privateKey = keyStore.getKey(alias, null) as PrivateKey
-        val signature = Signature.getInstance("Ed25519")
+        val signature = Signature.getInstance("SHA256withECDSA")
 
         signature.initSign(privateKey)
         signature.update(challenge)
