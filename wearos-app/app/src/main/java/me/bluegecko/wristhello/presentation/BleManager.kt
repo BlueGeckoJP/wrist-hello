@@ -11,6 +11,7 @@ import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
+import android.util.Log
 import androidx.annotation.RequiresPermission
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -74,7 +75,7 @@ class BleManager(private val context: Context, private val keyStoreManager: Keys
            when(newState) {
                BluetoothProfile.STATE_CONNECTED -> {
                    this@BleManager.gatt = gatt
-                   gatt.discoverServices()
+                   gatt.requestMtu(512)
                }
 
                BluetoothProfile.STATE_DISCONNECTED -> {
@@ -83,6 +84,12 @@ class BleManager(private val context: Context, private val keyStoreManager: Keys
                    this@BleManager.gatt = null
                }
            }
+        }
+
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            Log.d("BleManager", "onMtuChanged: mtu=$mtu, status=$status")
+            gatt.discoverServices()
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)

@@ -19,7 +19,9 @@ class KeystoreManager {
             val spec = KeyGenParameterSpec.Builder(
                 alias,
                 KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
-            ).build()
+            )
+                .setDigests(KeyProperties.DIGEST_NONE)
+                .build()
             kpg.initialize(spec)
             kpg.generateKeyPair()
         }
