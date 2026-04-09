@@ -19,7 +19,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
     fun connect() {
-        viewModelScope.launch  {
+        viewModelScope.launch {
             bleManager.connectToPairedDevice()
         }
     }
@@ -27,5 +27,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
     fun disconnect() {
         bleManager.disconnect()
+    }
+
+    fun getPublicKey(): ByteArray {
+        return keyStoreManager.getOrGenerateRawPublicKey()
     }
 }
