@@ -29,6 +29,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.material3.AppScaffold
+import androidx.wear.compose.material3.EdgeButton
+import androidx.wear.compose.material3.EdgeButtonSize
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.ui.tooling.preview.WearPreviewDevices
@@ -36,7 +38,7 @@ import androidx.wear.compose.ui.tooling.preview.WearPreviewFontScales
 import me.bluegecko.wristhello.presentation.theme.WristHelloTheme
 
 class MainActivity : ComponentActivity() {
-    @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -46,13 +48,12 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-@androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+@RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
 fun WearApp() {
+
     WristHelloTheme {
         AppScaffold {
-            ScreenScaffold {
-                MainScreen()
-            }
+            MainScreen()
         }
     }
 }
@@ -66,36 +67,59 @@ fun DefaultPreview() {
 }
 
 @Composable
-@androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+@RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
 fun MainScreen(viewModel: MainViewModel = viewModel()) {
+
     val bleState by viewModel.bleState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     val requestPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    )  { isGranted: Boolean ->
+    ) { isGranted: Boolean ->
         if (isGranted) viewModel.connect()
     }
 
     LaunchedEffect(Unit) {
         val permission = Manifest.permission.BLUETOOTH_CONNECT
-        if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                permission
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
             viewModel.connect()
         } else {
             requestPermissionLauncher.launch(permission)
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        when (val state = bleState) {
-            is BleState.Disconnected -> Text("Disconnected")
-            is BleState.Connecting -> Text("Connecting...")
-            is BleState.Connected -> Text("Connected")
-            is BleState.Error -> Text("Error: ${state.message}")
+    ScreenScaffold {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                when (val state = bleState) {
+                    is BleState.Disconnected -> Text("Disconnected")
+                    is BleState.Connecting -> Text("Connecting...")
+                    is BleState.Connected -> Text("Connected")
+                    is BleState.Error -> Text("Error: ${state.message}")
+                }
+            }
+
+            EdgeButton(
+                onClick = {
+                    if (bleState is BleState.Connected) viewModel.disconnect()
+                    viewModel.connect()
+                },
+                enabled = bleState != BleState.Connecting,
+                buttonSize = EdgeButtonSize.ExtraSmall,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                Text("Reconnect")
+            }
         }
     }
 }
