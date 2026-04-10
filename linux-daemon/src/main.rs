@@ -23,7 +23,9 @@ use p256::{
     pkcs8::DecodePublicKey,
 };
 use rand::RngExt;
+use serde::Deserialize;
 use tokio::{io::AsyncWriteExt, net::UnixListener};
+use xdg::BaseDirectories;
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
@@ -31,8 +33,41 @@ const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6c
 
 const SOCKET_PATH: &str = "/run/wrist-hello/auth.sock";
 
+#[derive(Deserialize)]
+struct AppConfig {
+    public_key_der: String,
+    #[serde(skip)]
+    public_key_der_hex: Vec<u8>,
+}
+
+impl AppConfig {
+    fn load() -> eyre::Result<Self> {
+        let xdg_dirs = BaseDirectories::new();
+        let config_home = match xdg_dirs.get_config_home() {
+            Some(home) => home,
+            None => eyre::bail!("Failed to get config home directory"),
+        };
+        let path = config_home.join("wrist-hello-config.toml");
+
+        let contents = std::fs::read_to_string(path)?;
+        let mut config: AppConfig = toml::from_str(&contents)?;
+
+        config.public_key_der_hex = hex::decode(&config.public_key_der)?;
+
+        Ok(config)
+    }
+}
+
 #[tokio::main]
 async fn main() -> bluer::Result<()> {
+    let app_config = match AppConfig::load() {
+        Ok(config) => Arc::new(config),
+        Err(e) => {
+            println!("Error loading config: {}", e);
+            return Ok(());
+        }
+    };
+
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
     println!("Using adapter {}", adapter.name());
@@ -107,24 +142,21 @@ async fn main() -> bluer::Result<()> {
                 println!("RESPONSE_CHAR:WRITE: Connected from {}", req.device_address);
                 let state = challenge_verify.clone();
                 let last_verified_at_verify = last_verified_at_verify.clone();
+                let app_config = app_config.clone();
                 Box::pin(async move {
                     let challenge = {
                         let locked = state.read().unwrap();
                         locked.clone()
                     };
 
-                    // TODO: Replace it with actual key
-                    // Public key bytes
-                    let verifying_key_der = hex::decode("<ACTUAL_PUB_KEY_DER>").unwrap();
-
-                    let verifying_key = match VerifyingKey::from_public_key_der(&verifying_key_der)
-                    {
-                        Ok(key) => key,
-                        Err(_) => {
-                            println!("Error: Invalid public key");
-                            return Err(ReqError::Failed);
-                        }
-                    };
+                    let verifying_key =
+                        match VerifyingKey::from_public_key_der(&app_config.public_key_der_hex) {
+                            Ok(key) => key,
+                            Err(_) => {
+                                println!("Error: Invalid public key");
+                                return Err(ReqError::Failed);
+                            }
+                        };
 
                     let signature = match Signature::from_der(&new_value) {
                         Ok(sig) => sig,
