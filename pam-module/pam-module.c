@@ -1,11 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <security/_pam_types.h>
 #include <security/pam_ext.h>
 #include <security/pam_modules.h>
 #include <stddef.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <syslog.h>
 #include <unistd.h>
@@ -15,9 +17,48 @@
 #define SOCKET_PATH "/run/wrist-hello/auth.sock"
 #define BUF_SIZE 256
 
+// Result: 0=Success, 1=Should retry, -1=Fatal error
+int check_status(int fd) {
+    char buf[BUF_SIZE] = {0};
+    ssize_t n = recv(fd, buf, sizeof(SocketPayload), MSG_WAITALL);
+    if (n == 0) {
+        return -1;  // Socket disconnected
+    }
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 1;
+        }
+        return -1;
+    }
+
+    uint8_t* payload = (uint8_t*)buf;
+    SocketPayload sp = {0};
+    if (!socket_payload_deserialize(payload, (size_t)n, &sp) || sp.status != STATUS_VERIFIED) {
+        return 1;
+    }
+
+    return 0;
+}
+
+int check_status_with_ttl(int fd, int ttl) {
+    while (ttl-- > 0) {
+        int status = check_status(fd);
+
+        if (status == 0) return 0;    // If success
+        if (status == -1) return -1;  // If fatal errors occurred
+    }
+
+    return -1;
+}
+
 int auth_via_socket(char* socket_path) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
+
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
 
     struct sockaddr_un addr = {
         .sun_family = AF_UNIX,
@@ -29,18 +70,10 @@ int auth_via_socket(char* socket_path) {
         return -1;
     }
 
-    char res[BUF_SIZE] = {0};
-    ssize_t n = read(fd, res, sizeof(res) - 1);
+    int result = check_status_with_ttl(fd, 5);
     close(fd);
-    if (n <= 0) return -1;
 
-    uint8_t* payload = (uint8_t*)res;
-    SocketPayload sp = {0};
-    if (!socket_payload_deserialize(payload, (size_t)n, &sp) || sp.status != STATUS_VERIFIED) {
-        return -1;
-    }
-
-    return 0;
+    return (result == 0) ? 0 : -1;
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, const char** argv) {
