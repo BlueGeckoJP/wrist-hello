@@ -9,7 +9,6 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
-import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.RequiresPermission
@@ -37,11 +36,11 @@ class BleManager(private val context: Context, private val keyStoreManager: Keys
     val bleState: StateFlow<BleState> = _bleState
 
     private val _challengeData = MutableStateFlow<ByteArray?>(null)
-    val challengeData: StateFlow<ByteArray?> = _challengeData
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun findDeviceByServiceUuid(context: Context, targetUuid: UUID): BluetoothDevice? {
-        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        val adapter =
+            (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         if (adapter == null || !adapter.isEnabled) return null
 
         val targetParcelUuid = ParcelUuid.fromString(targetUuid.toString())
@@ -52,8 +51,6 @@ class BleManager(private val context: Context, private val keyStoreManager: Keys
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun connectToPairedDevice() {
-        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
-
         val target: BluetoothDevice? = findDeviceByServiceUuid(context, SERVICE_UUID)
         if (target == null) {
             _bleState.value = BleState.Error("No paired device found")
@@ -72,24 +69,25 @@ class BleManager(private val context: Context, private val keyStoreManager: Keys
     private val gattCallback = object : BluetoothGattCallback() {
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-           when(newState) {
-               BluetoothProfile.STATE_CONNECTED -> {
-                   this@BleManager.gatt = gatt
-                   gatt.requestMtu(512)
-               }
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> {
+                    this@BleManager.gatt = gatt
+                    gatt.requestMtu(512)
 
-               BluetoothProfile.STATE_DISCONNECTED -> {
-                   _bleState.value = BleState.Disconnected
-                   gatt.close()
-                   this@BleManager.gatt = null
-               }
-           }
+                    gatt.discoverServices()
+                }
+
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    _bleState.value = BleState.Disconnected
+                    gatt.close()
+                    this@BleManager.gatt = null
+                }
+            }
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             Log.d("BleManager", "onMtuChanged: mtu=$mtu, status=$status")
-            gatt.discoverServices()
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -146,8 +144,13 @@ class BleManager(private val context: Context, private val keyStoreManager: Keys
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun writeResponse(gatt: BluetoothGatt, response: ByteArray) {
-        val responseChar = gatt.getService(SERVICE_UUID)?.getCharacteristic(RESPONSE_CHAR_UUID) ?: return
+        val responseChar =
+            gatt.getService(SERVICE_UUID)?.getCharacteristic(RESPONSE_CHAR_UUID) ?: return
 
-        gatt.writeCharacteristic(responseChar, response, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        gatt.writeCharacteristic(
+            responseChar,
+            response,
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        )
     }
 }

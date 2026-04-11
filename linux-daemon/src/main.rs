@@ -247,22 +247,24 @@ async fn start_socket_server(last_verified_at: Arc<AtomicU64>) -> eyre::Result<(
                         match elapsed_res {
                             Ok(duration) => {
                                 let elapsed = duration.as_secs().saturating_sub(last_verified_at);
-                                match elapsed {
-                                    0 => bindings::SocketPayload {
+                                if last_verified_at == 0 || elapsed == 0 {
+                                    bindings::SocketPayload {
                                         status: bindings::STATUS_UNVERIFIED,
                                         has_elapsed: 0,
                                         elapsed: 0,
-                                    },
-                                    elapsed if elapsed <= 30 => bindings::SocketPayload {
+                                    }
+                                } else if elapsed <= 30 {
+                                    bindings::SocketPayload {
                                         status: bindings::STATUS_VERIFIED,
                                         has_elapsed: 1,
                                         elapsed,
-                                    },
-                                    elapsed => bindings::SocketPayload {
+                                    }
+                                } else {
+                                    bindings::SocketPayload {
                                         status: bindings::STATUS_EXPIRED,
                                         has_elapsed: 1,
                                         elapsed,
-                                    },
+                                    }
                                 }
                             }
                             Err(_) => bindings::SocketPayload {
