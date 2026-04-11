@@ -1,4 +1,4 @@
-![Data flow diagram](./assets/new-flow-0412-dfd.png)
+![Data flow diagram](./assets/new-flow-memo-0412-dfd.png)
 
 pam-moduleが一番上
 
