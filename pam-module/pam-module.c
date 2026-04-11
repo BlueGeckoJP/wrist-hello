@@ -15,14 +15,14 @@
 #define SOCKET_PATH "/run/wrist-hello/auth.sock"
 #define BUF_SIZE 256
 
-static int auth_via_socket(void) {
+int auth_via_socket(char* socket_path) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
 
     struct sockaddr_un addr = {
         .sun_family = AF_UNIX,
     };
-    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
     if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         close(fd);
@@ -53,7 +53,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
         return PAM_USER_UNKNOWN;
     }
 
-    if (auth_via_socket() != 0) {
+    if (auth_via_socket(SOCKET_PATH) != 0) {
         pam_syslog(pamh, LOG_WARNING, "Authentication failed: user=%s", user);
         return PAM_AUTH_ERR;
     }

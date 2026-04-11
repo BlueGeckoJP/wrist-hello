@@ -3,3 +3,4 @@
 *.d
 *.so
 compile_commands.json
+/test-pam-module
