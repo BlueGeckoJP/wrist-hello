@@ -4,19 +4,14 @@ fn main() {
     println!("cargo:rustc-link-search=native=../common");
     println!("cargo:rustc-link-lib=static=common");
 
-    let header_path = PathBuf::from("../common/common.h");
-
     let bindings = bindgen::Builder::default()
-        .header(header_path.to_str().unwrap())
+        .header("../common/common.h")
+        .allowlist_file(".*/common/common\\.h$")
         .clang_arg("-fparse-all-comments")
         .derive_debug(true)
         .derive_default(true)
         .derive_eq(true)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        .allowlist_type("SocketPayload")
-        .allowlist_type("ElapsedStatus")
-        .allowlist_function("socket_payload_deserialize")
-        .allowlist_function("socket_payload_serialize")
         .prepend_enum_name(false)
         .generate()
         .expect("Unable to generate bindings");
