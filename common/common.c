@@ -29,3 +29,19 @@ int socket_payload_serialize(const SocketPayload* in, uint8_t* out_buffer, size_
 
     return SOCKET_PAYLOAD_SIZE;
 }
+
+bool socket_command_deserialize(const uint8_t* payload, size_t payload_len, SocketCommand* out) {
+    if (payload == NULL || out == NULL) return false;
+    if (payload_len < 1) return false;
+
+    switch (payload[0]) {
+        case CMD_CHECK_STATUS:
+            *out = CMD_CHECK_STATUS;
+            return true;
+        case CMD_TRIGGER_CHALLENGE:
+            *out = CMD_TRIGGER_CHALLENGE;
+            return true;
+        default:
+            return false;
+    }
+}
