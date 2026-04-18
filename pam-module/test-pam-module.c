@@ -32,6 +32,10 @@ void stop_server(void) {
 
 void* server_thread(void* arg) {
     g_server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (g_server_fd == -1) {
+        printf("socket() failed\n");
+        return NULL;
+    }
 
     struct sockaddr_un addr = {0};
     addr.sun_family = AF_UNIX;

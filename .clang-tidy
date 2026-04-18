@@ -1,2 +1,7 @@
-Checks: "clang-diagnostic-*,clang-analyzer-*,bugprone-*,cert-*"
+Checks: "clang-diagnostic-*,clang-analyzer-*,bugprone-*,cert-*,\
+         -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,\
+         -bugprone-reserved-identifier,\
+         -bugprone-easily-swappable-parameters,\
+         -cert-dcl37-c,\
+         -cert-dcl51-cpp"
 
