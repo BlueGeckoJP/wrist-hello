@@ -24,7 +24,11 @@ use p256::{
 };
 use rand::RngExt;
 use serde::Deserialize;
-use tokio::{io::AsyncWriteExt, net::UnixListener};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::UnixListener,
+    sync::Notify,
+};
 use xdg::BaseDirectories;
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
@@ -80,6 +84,10 @@ async fn main() -> bluer::Result<()> {
     let challenge_notify = current_challenge.clone();
     let challenge_verify = current_challenge.clone();
 
+    let challenge_trigger = Arc::new(Notify::new());
+    let challenge_trigger_notify = challenge_trigger.clone();
+    let challenge_trigger_socket = challenge_trigger.clone();
+
     let last_verified_at = Arc::new(AtomicU64::new(0));
     let last_verified_at_verify = last_verified_at.clone();
 
@@ -112,6 +120,7 @@ async fn main() -> bluer::Result<()> {
             notify: true,
             method: CharacteristicNotifyMethod::Fun(Box::new(move |mut notifier| {
                 let state = challenge_notify.clone();
+                let trigger = challenge_trigger_notify.clone();
                 Box::pin(async move {
                     let new_challenge = {
                         let mut rng = rand::rngs::ThreadRng::default();
@@ -119,13 +128,30 @@ async fn main() -> bluer::Result<()> {
                         rng.fill(ch.as_mut_slice());
                         ch
                     };
-
                     if let Ok(mut locked) = state.write() {
                         *locked = new_challenge.clone();
                     }
+                    println!("NOTIFY: Initial challenge: {:?}", new_challenge);
+                    if notifier.notify(new_challenge).await.is_err() {
+                        return;
+                    }
 
-                    println!("NOTIFY: Generated new challenge: {:?}", new_challenge);
-                    let _ = notifier.notify(new_challenge).await;
+                    loop {
+                        trigger.notified().await;
+                        let new_challenge = {
+                            let mut rng = rand::rngs::ThreadRng::default();
+                            let mut ch = vec![0u8; 32];
+                            rng.fill(ch.as_mut_slice());
+                            ch
+                        };
+                        if let Ok(mut locked) = state.write() {
+                            *locked = new_challenge.clone();
+                        }
+                        println!("NOTIFY: Re-triggered challenge: {:?}", new_challenge);
+                        if notifier.notify(new_challenge).await.is_err() {
+                            break;
+                        }
+                    }
                 })
             })),
             ..Default::default()
@@ -214,7 +240,7 @@ async fn main() -> bluer::Result<()> {
     println!("Advertising started");
 
     tokio::spawn(async move {
-        if let Err(e) = start_socket_server(last_verified_at).await {
+        if let Err(e) = start_socket_server(last_verified_at, challenge_trigger_socket).await {
             println!("Error in socket server: {}", e);
         }
     });
@@ -227,7 +253,10 @@ async fn main() -> bluer::Result<()> {
     Ok(())
 }
 
-async fn start_socket_server(last_verified_at: Arc<AtomicU64>) -> eyre::Result<()> {
+async fn start_socket_server(
+    last_verified_at: Arc<AtomicU64>,
+    challenge_trigger: Arc<Notify>,
+) -> eyre::Result<()> {
     // The bind() function will fail if the socket file already exists
     let _ = std::fs::remove_file(SOCKET_PATH);
 
@@ -235,19 +264,55 @@ async fn start_socket_server(last_verified_at: Arc<AtomicU64>) -> eyre::Result<(
     println!("Listening on {}", SOCKET_PATH);
 
     loop {
-        match listener.accept().await {
-            Ok((mut stream, _addr)) => {
-                println!("Connection accepted");
-                let last_verified_at = last_verified_at.clone();
-                tokio::spawn(async move {
-                    let response = {
-                        let last_verified_at = last_verified_at.load(Ordering::SeqCst);
-                        let elapsed_res = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH);
+        let (mut stream, addr) = match listener.accept().await {
+            Ok((stream, addr)) => (stream, addr),
+            Err(e) => {
+                println!("Error accepting connection: {}", e);
+                continue;
+            }
+        };
 
-                        match elapsed_res {
-                            Ok(duration) => {
-                                let elapsed = duration.as_secs().saturating_sub(last_verified_at);
-                                if last_verified_at == 0 || elapsed == 0 {
+        let last_verified_at = last_verified_at.clone();
+        let challenge_trigger = challenge_trigger.clone();
+
+        tokio::spawn(async move {
+            println!("Connection accepted from {:?}", addr);
+
+            let mut buf = vec![0u8; 1024];
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(0) => {
+                        println!("Connection closed by client");
+                        return;
+                    }
+                    Ok(n) => {
+                        let received_data = &buf[..n];
+                        let mut cmd: bindings::SocketCommand = 0;
+                        match unsafe {
+                            bindings::socket_command_deserialize(
+                                received_data.as_ptr(),
+                                received_data.len(),
+                                &mut cmd,
+                            )
+                        } {
+                            true => println!("Received command: {}", cmd),
+                            false => {
+                                println!("Failed to deserialize command");
+                                return;
+                            }
+                        }
+
+                        match cmd {
+                            bindings::CMD_CHECK_STATUS => {
+                                println!("CMD_CHECK_STATUS received");
+
+                                let last_verified_at = last_verified_at.load(Ordering::SeqCst);
+                                let unix_now = SystemTime::now()
+                                    .duration_since(SystemTime::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs();
+                                let elapsed = unix_now.saturating_sub(last_verified_at);
+                                let result = if last_verified_at == 0 {
                                     bindings::SocketPayload {
                                         status: bindings::STATUS_UNVERIFIED,
                                         has_elapsed: 0,
@@ -265,38 +330,39 @@ async fn start_socket_server(last_verified_at: Arc<AtomicU64>) -> eyre::Result<(
                                         has_elapsed: 1,
                                         elapsed,
                                     }
-                                }
-                            }
-                            Err(_) => bindings::SocketPayload {
-                                status: bindings::STATUS_ERROR,
-                                has_elapsed: 0,
-                                elapsed: 0,
-                            },
-                        }
-                    };
-                    let mut raw_buffer = vec![0u8; 10];
-                    unsafe {
-                        bindings::socket_payload_serialize(
-                            &response,
-                            raw_buffer.as_mut_ptr(),
-                            raw_buffer.len(),
-                        );
-                    }
-                    if let Err(e) = stream.write_all(&raw_buffer).await {
-                        println!("Error writing to socket: {}", e);
-                    }
-                    if let Err(e) = stream.flush().await {
-                        println!("Error flushing socket: {}", e);
-                    }
-                    println!("Connection closed");
-                });
-            }
-            Err(e) => {
-                println!("Error: {}", e);
-                break;
-            }
-        }
-    }
+                                };
 
-    Ok(())
+                                let mut raw_buffer = vec![0u8; 10];
+                                unsafe {
+                                    bindings::socket_payload_serialize(
+                                        &result,
+                                        raw_buffer.as_mut_ptr(),
+                                        raw_buffer.len(),
+                                    );
+                                }
+                                if let Err(e) = stream.write_all(&raw_buffer).await {
+                                    println!("Error writing to socket: {}", e);
+                                }
+                                if let Err(e) = stream.flush().await {
+                                    println!("Error flushing socket: {}", e);
+                                }
+                                println!("Replied and connection closed");
+                            }
+                            bindings::CMD_TRIGGER_CHALLENGE => {
+                                println!("CMD_TRIGGER_CHALLENGE received");
+                                challenge_trigger.notify_one();
+                            }
+                            _ => {
+                                println!("Unknown command received: {}", cmd);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("Error reading from socket: {}", e);
+                        return;
+                    }
+                }
+            }
+        });
+    }
 }

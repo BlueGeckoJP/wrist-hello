@@ -23,3 +23,10 @@ typedef struct {
 
 bool socket_payload_deserialize(const uint8_t* payload, size_t payload_len, SocketPayload* out);
 int socket_payload_serialize(const SocketPayload* in, uint8_t* out_buffer, size_t out_buffer_len);
+
+typedef enum __attribute__((packed)) {
+    CMD_CHECK_STATUS = 1,
+    CMD_TRIGGER_CHALLENGE,
+} SocketCommand;
+
+bool socket_command_deserialize(const uint8_t* payload, size_t payload_len, SocketCommand* out);
