@@ -5,7 +5,7 @@ mod bindings {
 use std::{
     sync::{
         Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::SystemTime,
 };
@@ -91,6 +91,10 @@ async fn main() -> bluer::Result<()> {
     let last_verified_at = Arc::new(AtomicU64::new(0));
     let last_verified_at_verify = last_verified_at.clone();
 
+    let is_first_notify = Arc::new(AtomicBool::new(true));
+    let is_first_notify_notify = is_first_notify.clone();
+    let is_first_notify_cmd = is_first_notify.clone();
+
     let challenge_char = Characteristic {
         uuid: CHALLENGE_CHAR_UUID,
         read: Some(CharacteristicRead {
@@ -121,6 +125,7 @@ async fn main() -> bluer::Result<()> {
             method: CharacteristicNotifyMethod::Fun(Box::new(move |mut notifier| {
                 let state = challenge_notify.clone();
                 let trigger = challenge_trigger_notify.clone();
+                let is_first_notify_notify = is_first_notify_notify.clone();
                 Box::pin(async move {
                     let new_challenge = {
                         let mut rng = rand::rngs::ThreadRng::default();
@@ -135,6 +140,7 @@ async fn main() -> bluer::Result<()> {
                     if notifier.notify(new_challenge).await.is_err() {
                         return;
                     }
+                    is_first_notify_notify.store(false, Ordering::SeqCst);
 
                     loop {
                         trigger.notified().await;
@@ -240,7 +246,13 @@ async fn main() -> bluer::Result<()> {
     println!("Advertising started");
 
     tokio::spawn(async move {
-        if let Err(e) = start_socket_server(last_verified_at, challenge_trigger_socket).await {
+        if let Err(e) = start_socket_server(
+            last_verified_at,
+            challenge_trigger_socket,
+            is_first_notify_cmd,
+        )
+        .await
+        {
             println!("Error in socket server: {}", e);
         }
     });
@@ -256,6 +268,7 @@ async fn main() -> bluer::Result<()> {
 async fn start_socket_server(
     last_verified_at: Arc<AtomicU64>,
     challenge_trigger: Arc<Notify>,
+    is_first_notify: Arc<AtomicBool>,
 ) -> eyre::Result<()> {
     // The bind() function will fail if the socket file already exists
     let _ = std::fs::remove_file(SOCKET_PATH);
@@ -274,6 +287,7 @@ async fn start_socket_server(
 
         let last_verified_at = last_verified_at.clone();
         let challenge_trigger = challenge_trigger.clone();
+        let is_first_notify = is_first_notify.clone();
 
         tokio::spawn(async move {
             println!("Connection accepted from {:?}", addr);
@@ -349,8 +363,14 @@ async fn start_socket_server(
                                 println!("Replied and connection closed");
                             }
                             bindings::CMD_TRIGGER_CHALLENGE => {
-                                println!("CMD_TRIGGER_CHALLENGE received");
-                                challenge_trigger.notify_one();
+                                if is_first_notify.load(Ordering::SeqCst) {
+                                    println!(
+                                        "CMD_TRIGGER_CHALLENGE received, but notification skipped because the is_first_notify flag is true"
+                                    );
+                                } else {
+                                    println!("CMD_TRIGGER_CHALLENGE received");
+                                    challenge_trigger.notify_one();
+                                }
                             }
                             _ => {
                                 println!("Unknown command received: {}", cmd);
