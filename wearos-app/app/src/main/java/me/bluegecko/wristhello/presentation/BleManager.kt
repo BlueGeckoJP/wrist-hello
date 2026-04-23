@@ -29,7 +29,11 @@ sealed class BleState {
     data class Error(val message: String) : BleState()
 }
 
-class BleManager(private val context: Context, private val keyStoreManager: KeystoreManager) {
+class BleManager(
+    private val context: Context,
+    private val keyStoreManager: KeystoreManager,
+    private val onChallengeReceived: (() -> Unit)? = null
+) {
     private var gatt: BluetoothGatt? = null
 
     private val _bleState = MutableStateFlow<BleState>(BleState.Disconnected)
@@ -133,6 +137,7 @@ class BleManager(private val context: Context, private val keyStoreManager: Keys
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun handleChallenge(gatt: BluetoothGatt, challenge: ByteArray) {
         _challengeData.value = challenge
+        onChallengeReceived?.invoke()
 
         if (!keyStoreManager.hasKey()) {
             keyStoreManager.getOrGenerateRawPublicKey()

@@ -77,15 +77,21 @@ fun WearApp(viewModel: MainViewModel = viewModel()) {
     }
 
     LaunchedEffect(Unit) {
-        val permission = Manifest.permission.BLUETOOTH_CONNECT
         if (ContextCompat.checkSelfPermission(
                 context,
-                permission
+                Manifest.permission.BLUETOOTH_CONNECT
             ) == PackageManager.PERMISSION_GRANTED
         ) {
             viewModel.connect()
         } else {
-            requestPermissionLauncher.launch(permission)
+            requestPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 

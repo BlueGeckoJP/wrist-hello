@@ -27,11 +27,14 @@ class ForegroundService : Service() {
         super.onCreate()
 
         createNotificationChannel()
+        createChallengeNotificationChannel()
+
         startForeground(NOTIFICATION_ID, buildNotification("BLE foreground service is starting..."))
 
         bleManager = BleManager(
             context = applicationContext,
-            keyStoreManager = KeystoreManager()
+            keyStoreManager = KeystoreManager(),
+            onChallengeReceived = { showChallengeNotification() }
         )
 
         scope.launch {
@@ -117,8 +120,42 @@ class ForegroundService : Service() {
         manager.notify(NOTIFICATION_ID, buildNotification(text))
     }
 
+    private fun createChallengeNotificationChannel() {
+        val manager = getSystemService(NotificationManager::class.java)
+        val channel = NotificationChannel(
+            CHALLENGE_CHANNEL_ID,
+            "Challenge alerts",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Alerts when a challenge is received"
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 300, 200, 300)
+            setSound(null, null)
+        }
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun showChallengeNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        val notification =
+            Notification.Builder(this, CHALLENGE_CHANNEL_ID).setContentTitle("Wrist Hello")
+                .setContentText("Signing a challenge").setStyle(
+                    Notification.BigTextStyle().bigText(
+                        """
+                           Signing and replying a challenge...
+                           Please check the authentication screen on your PC
+                        """.trimIndent()
+                    )
+                ).setSmallIcon(R.mipmap.ic_launcher)
+                .setAutoCancel(true).build()
+
+        manager.notify(CHALLENGE_NOTIFICATION_ID, notification)
+    }
+
     companion object {
         private const val CHANNEL_ID = "ble_foreground"
+        private const val CHALLENGE_CHANNEL_ID = "challenge_alerts"
         private const val NOTIFICATION_ID = 1001
+        private const val CHALLENGE_NOTIFICATION_ID = 1002
     }
 }
