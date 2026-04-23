@@ -29,6 +29,7 @@ use tokio::{
     net::UnixListener,
     sync::Notify,
 };
+use tracing::{error, info, warn};
 use xdg::BaseDirectories;
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
@@ -64,20 +65,22 @@ impl AppConfig {
 
 #[tokio::main]
 async fn main() -> bluer::Result<()> {
+    tracing_subscriber::fmt::init();
+
     let app_config = match AppConfig::load() {
         Ok(config) => Arc::new(config),
         Err(e) => {
-            println!("Error loading config: {}", e);
+            error!("Error loading config: {}", e);
             return Ok(());
         }
     };
 
     let session = bluer::Session::new().await?;
     let adapter = session.default_adapter().await?;
-    println!("Using adapter {}", adapter.name());
+    info!("Using adapter {}", adapter.name());
 
     adapter.set_powered(true).await?;
-    println!("Adapter powered on");
+    info!("Adapter powered on");
 
     let current_challenge = Arc::new(RwLock::new(vec![0u8; 32]));
     let challenge_read = current_challenge.clone();
@@ -101,7 +104,7 @@ async fn main() -> bluer::Result<()> {
             read: true,
             encrypt_authenticated_read: true,
             fun: Box::new(move |req| {
-                println!("CHALLENGE_CHAR:READ: Connected from {}", req.device_address);
+                info!("CHALLENGE_CHAR:READ: Connected from {}", req.device_address);
                 let state = challenge_read.clone();
                 Box::pin(async move {
                     let new_challenge = {
@@ -115,7 +118,7 @@ async fn main() -> bluer::Result<()> {
                         *locked = new_challenge.clone();
                     }
 
-                    println!("READ: Generated new challenge: {:?}", new_challenge);
+                    info!("READ: Generated new challenge: {:?}", new_challenge);
                     Ok(new_challenge)
                 })
             }),
@@ -137,7 +140,7 @@ async fn main() -> bluer::Result<()> {
                     if let Ok(mut locked) = state.write() {
                         *locked = new_challenge.clone();
                     }
-                    println!("NOTIFY: Initial challenge: {:?}", new_challenge);
+                    info!("NOTIFY: Initial challenge: {:?}", new_challenge);
                     if notifier.notify(new_challenge).await.is_err() {
                         return;
                     }
@@ -154,7 +157,7 @@ async fn main() -> bluer::Result<()> {
                         if let Ok(mut locked) = state.write() {
                             *locked = new_challenge.clone();
                         }
-                        println!("NOTIFY: Re-triggered challenge: {:?}", new_challenge);
+                        info!("NOTIFY: Re-triggered challenge: {:?}", new_challenge);
                         if notifier.notify(new_challenge).await.is_err() {
                             break;
                         }
@@ -173,7 +176,7 @@ async fn main() -> bluer::Result<()> {
             write_without_response: true,
             encrypt_authenticated_write: true,
             method: CharacteristicWriteMethod::Fun(Box::new(move |new_value, req| {
-                println!("RESPONSE_CHAR:WRITE: Connected from {}", req.device_address);
+                info!("RESPONSE_CHAR:WRITE: Connected from {}", req.device_address);
                 let state = challenge_verify.clone();
                 let last_verified_at_verify = last_verified_at_verify.clone();
                 let app_config = app_config.clone();
@@ -187,7 +190,7 @@ async fn main() -> bluer::Result<()> {
                         match VerifyingKey::from_public_key_der(&app_config.public_key_der_hex) {
                             Ok(key) => key,
                             Err(_) => {
-                                println!("Error: Invalid public key");
+                                error!("Error: Invalid public key");
                                 return Err(ReqError::Failed);
                             }
                         };
@@ -195,14 +198,14 @@ async fn main() -> bluer::Result<()> {
                     let signature = match Signature::from_der(&new_value) {
                         Ok(sig) => sig,
                         Err(_) => {
-                            println!("Error: Invalid signature");
+                            error!("Error: Invalid signature");
                             return Err(ReqError::Failed);
                         }
                     };
 
                     match verifying_key.verify(&challenge, &signature) {
                         Ok(_) => {
-                            println!("Success");
+                            info!("Success");
                             let now = SystemTime::now();
                             let timestamp = now
                                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -213,7 +216,7 @@ async fn main() -> bluer::Result<()> {
                             Ok(())
                         }
                         Err(e) => {
-                            println!("Error: Invalid signature: {}", e);
+                            error!("Error: Invalid signature: {}", e);
                             Err(ReqError::Failed)
                         }
                     }
@@ -235,7 +238,7 @@ async fn main() -> bluer::Result<()> {
     };
 
     let _app_handle = adapter.serve_gatt_application(app).await?;
-    println!("GATT application registered");
+    info!("GATT application registered");
 
     let le_advertisement = bluer::adv::Advertisement {
         advertisement_type: bluer::adv::Type::Peripheral,
@@ -245,7 +248,7 @@ async fn main() -> bluer::Result<()> {
         ..Default::default()
     };
     let _adv_handle = adapter.advertise(le_advertisement).await?;
-    println!("Advertising started");
+    info!("Advertising started");
 
     tokio::spawn(async move {
         if let Err(e) = start_socket_server(
@@ -255,15 +258,15 @@ async fn main() -> bluer::Result<()> {
         )
         .await
         {
-            println!("Error in socket server: {}", e);
+            error!("Error in socket server: {}", e);
         }
     });
-    println!("Socket server started");
+    info!("Socket server started");
 
-    println!("Server running. Press Ctrl-C to quit.");
+    info!("Server running. Press Ctrl-C to quit.");
     tokio::signal::ctrl_c().await?;
 
-    println!("Stopping");
+    info!("Stopping");
     Ok(())
 }
 
@@ -276,13 +279,13 @@ async fn start_socket_server(
     let _ = std::fs::remove_file(SOCKET_PATH);
 
     let listener = UnixListener::bind(SOCKET_PATH)?;
-    println!("Listening on {}", SOCKET_PATH);
+    info!("Listening on {}", SOCKET_PATH);
 
     loop {
         let (mut stream, addr) = match listener.accept().await {
             Ok((stream, addr)) => (stream, addr),
             Err(e) => {
-                println!("Error accepting connection: {}", e);
+                error!("Error accepting connection: {}", e);
                 continue;
             }
         };
@@ -292,13 +295,13 @@ async fn start_socket_server(
         let is_first_notify = is_first_notify.clone();
 
         tokio::spawn(async move {
-            println!("Connection accepted from {:?}", addr);
+            info!("Connection accepted from {:?}", addr);
 
             let mut buf = vec![0u8; 1024];
             loop {
                 match stream.read(&mut buf).await {
                     Ok(0) => {
-                        println!("Connection closed by client");
+                        info!("Connection closed by client");
                         return;
                     }
                     Ok(n) => {
@@ -311,16 +314,16 @@ async fn start_socket_server(
                                 &mut cmd,
                             )
                         } {
-                            true => println!("Received command: {}", cmd),
+                            true => info!("Received command: {}", cmd),
                             false => {
-                                println!("Failed to deserialize command");
+                                error!("Failed to deserialize command");
                                 return;
                             }
                         }
 
                         match cmd {
                             bindings::CMD_CHECK_STATUS => {
-                                println!("CMD_CHECK_STATUS received");
+                                info!("CMD_CHECK_STATUS received");
 
                                 let last_verified_at = last_verified_at.load(Ordering::SeqCst);
                                 let unix_now = SystemTime::now()
@@ -357,30 +360,30 @@ async fn start_socket_server(
                                     );
                                 }
                                 if let Err(e) = stream.write_all(&raw_buffer).await {
-                                    println!("Error writing to socket: {}", e);
+                                    error!("Error writing to socket: {}", e);
                                 }
                                 if let Err(e) = stream.flush().await {
-                                    println!("Error flushing socket: {}", e);
+                                    error!("Error flushing socket: {}", e);
                                 }
-                                println!("Replied and connection closed");
+                                info!("Replied and connection closed");
                             }
                             bindings::CMD_TRIGGER_CHALLENGE => {
                                 if is_first_notify.load(Ordering::SeqCst) {
-                                    println!(
+                                    warn!(
                                         "CMD_TRIGGER_CHALLENGE received, but notification skipped because the is_first_notify flag is true"
                                     );
                                 } else {
-                                    println!("CMD_TRIGGER_CHALLENGE received");
+                                    info!("CMD_TRIGGER_CHALLENGE received");
                                     challenge_trigger.notify_one();
                                 }
                             }
                             _ => {
-                                println!("Unknown command received: {}", cmd);
+                                error!("Unknown command received: {}", cmd);
                             }
                         }
                     }
                     Err(e) => {
-                        println!("Error reading from socket: {}", e);
+                        error!("Error reading from socket: {}", e);
                         return;
                     }
                 }
