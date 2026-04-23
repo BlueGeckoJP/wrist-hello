@@ -6,6 +6,7 @@
 package me.bluegecko.wristhello.presentation
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -49,6 +50,10 @@ class MainActivity : ComponentActivity() {
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, ForegroundService::class.java)
+        )
         setContent {
             WearApp()
         }
