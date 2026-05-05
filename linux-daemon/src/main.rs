@@ -1,6 +1,7 @@
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
+mod socket_server;
 
 use std::{
     sync::{
@@ -24,19 +25,13 @@ use p256::{
 };
 use rand::RngExt;
 use serde::Deserialize;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::UnixListener,
-    sync::Notify,
-};
-use tracing::{error, info, warn};
+use tokio::sync::Notify;
+use tracing::{error, info};
 use xdg::BaseDirectories;
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
 const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6ce566a0a);
-
-const SOCKET_PATH: &str = "/run/wrist-hello/auth.sock";
 
 #[derive(Deserialize)]
 struct AppConfig {
@@ -251,7 +246,7 @@ async fn main() -> bluer::Result<()> {
     info!("Advertising started");
 
     tokio::spawn(async move {
-        if let Err(e) = start_socket_server(
+        if let Err(e) = socket_server::spawn(
             last_verified_at,
             challenge_trigger_socket,
             is_first_notify_cmd,
@@ -268,126 +263,4 @@ async fn main() -> bluer::Result<()> {
 
     info!("Stopping");
     Ok(())
-}
-
-async fn start_socket_server(
-    last_verified_at: Arc<AtomicU64>,
-    challenge_trigger: Arc<Notify>,
-    is_first_notify: Arc<AtomicBool>,
-) -> eyre::Result<()> {
-    // The bind() function will fail if the socket file already exists
-    let _ = std::fs::remove_file(SOCKET_PATH);
-
-    let listener = UnixListener::bind(SOCKET_PATH)?;
-    info!("Listening on {}", SOCKET_PATH);
-
-    loop {
-        let (mut stream, addr) = match listener.accept().await {
-            Ok((stream, addr)) => (stream, addr),
-            Err(e) => {
-                error!("Error accepting connection: {}", e);
-                continue;
-            }
-        };
-
-        let last_verified_at = last_verified_at.clone();
-        let challenge_trigger = challenge_trigger.clone();
-        let is_first_notify = is_first_notify.clone();
-
-        tokio::spawn(async move {
-            info!("Connection accepted from {:?}", addr);
-
-            let mut buf = vec![0u8; 1024];
-            loop {
-                match stream.read(&mut buf).await {
-                    Ok(0) => {
-                        info!("Connection closed by client");
-                        return;
-                    }
-                    Ok(n) => {
-                        let received_data = &buf[..n];
-                        let mut cmd: bindings::SocketCommand = 0;
-                        match unsafe {
-                            bindings::socket_command_deserialize(
-                                received_data.as_ptr(),
-                                received_data.len(),
-                                &mut cmd,
-                            )
-                        } {
-                            true => info!("Received command: {}", cmd),
-                            false => {
-                                error!("Failed to deserialize command");
-                                return;
-                            }
-                        }
-
-                        match cmd {
-                            bindings::CMD_CHECK_STATUS => {
-                                info!("CMD_CHECK_STATUS received");
-
-                                let last_verified_at = last_verified_at.load(Ordering::SeqCst);
-                                let unix_now = SystemTime::now()
-                                    .duration_since(SystemTime::UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs();
-                                let elapsed = unix_now.saturating_sub(last_verified_at);
-                                let result = if last_verified_at == 0 {
-                                    bindings::SocketPayload {
-                                        status: bindings::STATUS_UNVERIFIED,
-                                        has_elapsed: 0,
-                                        elapsed: 0,
-                                    }
-                                } else if elapsed <= 30 {
-                                    bindings::SocketPayload {
-                                        status: bindings::STATUS_VERIFIED,
-                                        has_elapsed: 1,
-                                        elapsed,
-                                    }
-                                } else {
-                                    bindings::SocketPayload {
-                                        status: bindings::STATUS_EXPIRED,
-                                        has_elapsed: 1,
-                                        elapsed,
-                                    }
-                                };
-
-                                let mut raw_buffer = vec![0u8; 10];
-                                unsafe {
-                                    bindings::socket_payload_serialize(
-                                        &result,
-                                        raw_buffer.as_mut_ptr(),
-                                        raw_buffer.len(),
-                                    );
-                                }
-                                if let Err(e) = stream.write_all(&raw_buffer).await {
-                                    error!("Error writing to socket: {}", e);
-                                }
-                                if let Err(e) = stream.flush().await {
-                                    error!("Error flushing socket: {}", e);
-                                }
-                                info!("Replied and connection closed");
-                            }
-                            bindings::CMD_TRIGGER_CHALLENGE => {
-                                if is_first_notify.load(Ordering::SeqCst) {
-                                    warn!(
-                                        "CMD_TRIGGER_CHALLENGE received, but notification skipped because the is_first_notify flag is true"
-                                    );
-                                } else {
-                                    info!("CMD_TRIGGER_CHALLENGE received");
-                                    challenge_trigger.notify_one();
-                                }
-                            }
-                            _ => {
-                                error!("Unknown command received: {}", cmd);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Error reading from socket: {}", e);
-                        return;
-                    }
-                }
-            }
-        });
-    }
 }
