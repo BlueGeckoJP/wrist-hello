@@ -1,29 +1,19 @@
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
+mod challenge_char;
+mod response_char;
 mod socket_server;
 
-use std::{
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-    time::SystemTime,
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicBool, AtomicU64},
 };
 
 use bluer::{
     Uuid,
-    gatt::local::{
-        Application, Characteristic, CharacteristicNotify, CharacteristicNotifyMethod,
-        CharacteristicRead, CharacteristicWrite, CharacteristicWriteMethod, ReqError, Service,
-    },
+    gatt::local::{Application, Service},
 };
-use ecdsa::signature::Verifier;
-use p256::{
-    ecdsa::{Signature, VerifyingKey},
-    pkcs8::DecodePublicKey,
-};
-use rand::RngExt;
 use serde::Deserialize;
 use tokio::sync::Notify;
 use tracing::{error, info};
@@ -79,7 +69,6 @@ async fn main() -> bluer::Result<()> {
 
     let current_challenge = Arc::new(RwLock::new(vec![0u8; 32]));
     let challenge_read = current_challenge.clone();
-    let challenge_notify = current_challenge.clone();
     let challenge_verify = current_challenge.clone();
 
     let challenge_trigger = Arc::new(Notify::new());
@@ -93,140 +82,23 @@ async fn main() -> bluer::Result<()> {
     let is_first_notify_notify = is_first_notify.clone();
     let is_first_notify_cmd = is_first_notify.clone();
 
-    let challenge_char = Characteristic {
-        uuid: CHALLENGE_CHAR_UUID,
-        read: Some(CharacteristicRead {
-            read: true,
-            encrypt_authenticated_read: true,
-            fun: Box::new(move |req| {
-                info!("CHALLENGE_CHAR:READ: Connected from {}", req.device_address);
-                let state = challenge_read.clone();
-                Box::pin(async move {
-                    let new_challenge = {
-                        let mut rng = rand::rngs::ThreadRng::default();
-                        let mut ch = vec![0u8; 32];
-                        rng.fill(ch.as_mut_slice());
-                        ch
-                    };
-
-                    if let Ok(mut locked) = state.write() {
-                        *locked = new_challenge.clone();
-                    }
-
-                    info!("READ: Generated new challenge: {:?}", new_challenge);
-                    Ok(new_challenge)
-                })
-            }),
-            ..Default::default()
-        }),
-        notify: Some(CharacteristicNotify {
-            notify: true,
-            method: CharacteristicNotifyMethod::Fun(Box::new(move |mut notifier| {
-                let state = challenge_notify.clone();
-                let trigger = challenge_trigger_notify.clone();
-                let is_first_notify_notify = is_first_notify_notify.clone();
-                Box::pin(async move {
-                    let new_challenge = {
-                        let mut rng = rand::rngs::ThreadRng::default();
-                        let mut ch = vec![0u8; 32];
-                        rng.fill(ch.as_mut_slice());
-                        ch
-                    };
-                    if let Ok(mut locked) = state.write() {
-                        *locked = new_challenge.clone();
-                    }
-                    info!("NOTIFY: Initial challenge: {:?}", new_challenge);
-                    if notifier.notify(new_challenge).await.is_err() {
-                        return;
-                    }
-                    is_first_notify_notify.store(false, Ordering::SeqCst);
-
-                    loop {
-                        trigger.notified().await;
-                        let new_challenge = {
-                            let mut rng = rand::rngs::ThreadRng::default();
-                            let mut ch = vec![0u8; 32];
-                            rng.fill(ch.as_mut_slice());
-                            ch
-                        };
-                        if let Ok(mut locked) = state.write() {
-                            *locked = new_challenge.clone();
-                        }
-                        info!("NOTIFY: Re-triggered challenge: {:?}", new_challenge);
-                        if notifier.notify(new_challenge).await.is_err() {
-                            break;
-                        }
-                    }
-                })
-            })),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    let response_char = Characteristic {
-        uuid: RESPONSE_CHAR_UUID,
-        write: Some(CharacteristicWrite {
-            write: true,
-            write_without_response: true,
-            encrypt_authenticated_write: true,
-            method: CharacteristicWriteMethod::Fun(Box::new(move |new_value, req| {
-                info!("RESPONSE_CHAR:WRITE: Connected from {}", req.device_address);
-                let state = challenge_verify.clone();
-                let last_verified_at_verify = last_verified_at_verify.clone();
-                let app_config = app_config.clone();
-                Box::pin(async move {
-                    let challenge = {
-                        let locked = state.read().unwrap();
-                        locked.clone()
-                    };
-
-                    let verifying_key =
-                        match VerifyingKey::from_public_key_der(&app_config.public_key_der_hex) {
-                            Ok(key) => key,
-                            Err(_) => {
-                                error!("Error: Invalid public key");
-                                return Err(ReqError::Failed);
-                            }
-                        };
-
-                    let signature = match Signature::from_der(&new_value) {
-                        Ok(sig) => sig,
-                        Err(_) => {
-                            error!("Error: Invalid signature");
-                            return Err(ReqError::Failed);
-                        }
-                    };
-
-                    match verifying_key.verify(&challenge, &signature) {
-                        Ok(_) => {
-                            info!("Success");
-                            let now = SystemTime::now();
-                            let timestamp = now
-                                .duration_since(SystemTime::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs();
-                            last_verified_at_verify.store(timestamp, Ordering::SeqCst);
-
-                            Ok(())
-                        }
-                        Err(e) => {
-                            error!("Error: Invalid signature: {}", e);
-                            Err(ReqError::Failed)
-                        }
-                    }
-                })
-            })),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
     let app = Application {
         services: vec![Service {
             uuid: SERVICE_UUID,
             primary: true,
-            characteristics: vec![challenge_char, response_char],
+            characteristics: vec![
+                challenge_char::generate_challenge_char(
+                    challenge_read,
+                    challenge_trigger_notify,
+                    is_first_notify_notify,
+                ),
+                response_char::generate_response_char(
+                    challenge_verify,
+                    last_verified_at_verify,
+                    app_config.public_key_der_hex.clone(),
+                ),
+            ],
+
             ..Default::default()
         }],
         ..Default::default()

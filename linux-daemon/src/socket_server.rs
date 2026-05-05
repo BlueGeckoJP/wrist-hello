@@ -81,7 +81,7 @@ async fn handle_client(
             challenge_trigger.clone(),
             is_first_notify.clone(),
         )
-        .await
+        .await?;
     }
 
     Ok(())
@@ -93,13 +93,13 @@ async fn handle_socket_command(
     last_verified_at: Arc<AtomicU64>,
     challenge_trigger: Arc<Notify>,
     is_first_notify: Arc<AtomicBool>,
-) {
+) -> eyre::Result<()> {
     let mut cmd: bindings::SocketCommand = 0;
     match unsafe { bindings::socket_command_deserialize(data.as_ptr(), data.len(), &mut cmd) } {
         true => info!("Received command: {:?}", cmd),
         false => {
             error!("Failed to deserialize command from socket data");
-            return;
+            return Err(eyre::eyre!("Failed to deserialize command"));
         }
     }
 
@@ -112,6 +112,8 @@ async fn handle_socket_command(
             error!("Received unknown command: {:?}", cmd);
         }
     }
+
+    Ok(())
 }
 
 async fn handle_check_status(stream: &mut UnixStream, last_verified_at: Arc<AtomicU64>) {
