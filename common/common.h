@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define SOCKET_PAYLOAD_SIZE 10  // 1 + 1 + 8
+#define AUTH_CACHE_SIZE 268     // 4 + 128 + 128 + 8
 
 typedef enum __attribute__((packed)) {
     STATUS_UNVERIFIED = 1,
@@ -30,3 +31,13 @@ typedef enum __attribute__((packed)) {
 } SocketCommand;
 
 bool socket_command_deserialize(const uint8_t* payload, size_t payload_len, SocketCommand* out);
+
+typedef struct {
+    uint32_t uid;
+    char tty[128];
+    char service[128];
+    int64_t expires_at;
+} AuthCache;
+
+bool auth_cache_deserialize(const uint8_t* in, size_t in_len, AuthCache* out);
+int auth_cache_serialize(const AuthCache* in, uint8_t* out, size_t out_len);

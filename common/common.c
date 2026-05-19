@@ -45,3 +45,34 @@ bool socket_command_deserialize(const uint8_t* payload, size_t payload_len, Sock
             return false;
     }
 }
+
+bool auth_cache_deserialize(const uint8_t* in, size_t in_len, AuthCache* out) {
+    if (in == NULL || out == NULL) return false;
+    if (in_len < AUTH_CACHE_SIZE) return false;
+
+    memset(out, 0, sizeof(AuthCache));
+
+    memcpy(&out->uid, &in[0], sizeof(uint32_t));
+    memcpy(&out->tty, &in[4], sizeof(char[128]));
+    memcpy(&out->service, &in[132], sizeof(char[128]));
+    memcpy(&out->expires_at, &in[260], sizeof(int64_t));
+
+    out->tty[127] = '\0';
+    out->service[127] = '\0';
+
+    return true;
+}
+
+int auth_cache_serialize(const AuthCache* in, uint8_t* out, size_t out_len) {
+    if (in == NULL || out == NULL) return -1;
+    if (out_len < AUTH_CACHE_SIZE) return -1;
+
+    memset(out, 0, AUTH_CACHE_SIZE);
+
+    memcpy(&out[0], &in->uid, sizeof(uint32_t));
+    memcpy(&out[4], &in->tty, sizeof(char[128]));
+    memcpy(&out[132], &in->service, sizeof(char[128]));
+    memcpy(&out[260], &in->expires_at, sizeof(int64_t));
+
+    return AUTH_CACHE_SIZE;
+}
