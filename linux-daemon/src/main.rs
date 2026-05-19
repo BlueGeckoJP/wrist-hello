@@ -1,6 +1,7 @@
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
+mod auth_caches;
 mod challenge_char;
 mod response_char;
 mod socket_server;
