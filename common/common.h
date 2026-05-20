@@ -28,6 +28,8 @@ int socket_payload_serialize(const SocketPayload* in, uint8_t* out_buffer, size_
 typedef enum __attribute__((packed)) {
     CMD_CHECK_STATUS = 1,
     CMD_TRIGGER_CHALLENGE,
+    CMD_HAS_VALID_CACHE,
+    CMD_ADD_AUTH_CACHE
 } SocketCommand;
 
 bool socket_command_deserialize(const uint8_t* payload, size_t payload_len, SocketCommand* out);
