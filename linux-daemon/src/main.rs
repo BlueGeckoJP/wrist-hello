@@ -20,6 +20,8 @@ use tokio::sync::Notify;
 use tracing::{error, info};
 use xdg::BaseDirectories;
 
+use crate::socket_server::SocketServer;
+
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
 const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6ce566a0a);
@@ -118,14 +120,14 @@ async fn main() -> bluer::Result<()> {
     let _adv_handle = adapter.advertise(le_advertisement).await?;
     info!("Advertising started");
 
+    let socket_server = Arc::new(SocketServer::new(
+        last_verified_at,
+        challenge_trigger_socket,
+        is_first_notify_cmd,
+    ));
+
     tokio::spawn(async move {
-        if let Err(e) = socket_server::spawn(
-            last_verified_at,
-            challenge_trigger_socket,
-            is_first_notify_cmd,
-        )
-        .await
-        {
+        if let Err(e) = socket_server.spawn().await {
             error!("Error in socket server: {}", e);
         }
     });
