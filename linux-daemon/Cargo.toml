@@ -8,6 +8,7 @@ bluer = { version = "0.17.4", features = ["bluetoothd"] }
 ecdsa = "0.16.9"
 eyre = "0.6.12"
 hex = "0.4.3"
+libc = "0.2"
 p256 = { version = "0.13.2", features = ["ecdsa"] }
 rand = { version = "0.10.0", features = ["thread_rng"] }
 serde = { version = "1.0.228", features = ["derive"] }
