@@ -97,7 +97,7 @@ bool has_valid_cache(pam_handle_t* pamh, int fd, const AuthCache* item) {
     char buf[BUF_SIZE] = {0};
     n = recv(fd, buf, sizeof(bool), MSG_WAITALL);
     if (n == 0) {
-        return 1; // Socket disconnected
+        return 1;  // Socket disconnected
     }
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {

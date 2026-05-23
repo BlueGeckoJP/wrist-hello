@@ -181,7 +181,7 @@ impl SocketServer {
     async fn handle_has_valid_cache(&self, stream: &mut UnixStream) {
         info!("Handling has valid cache command");
 
-        let mut buf = [0u8; bindings::AUTH_CACHE_SIZE as usize];
+        let mut buf = [0u8; mem::size_of::<bindings::AuthCache>()];
         let n = match stream.read_exact(&mut buf).await {
             Ok(0) => {
                 info!("Client disconnected");
@@ -210,7 +210,7 @@ impl SocketServer {
     async fn handle_add_auth_cache(&self, stream: &mut UnixStream) {
         info!("Handling add auth cache command");
 
-        let mut buf = [0u8; bindings::AUTH_CACHE_SIZE as usize];
+        let mut buf = [0u8; mem::size_of::<bindings::AuthCache>()];
         let n = match stream.read_exact(&mut buf).await {
             Ok(0) => {
                 info!("Client disconnected");

@@ -63,7 +63,7 @@ void* server_thread(void* arg) {
                 const char* response = (g_verify_after_challenge && challenged)
                                            ? SERVER_RESPONSE_VERIFIED
                                            : g_response;
-                write(client_fd, response, SOCKET_PAYLOAD_SIZE);
+                write(client_fd, response, sizeof(SocketPayload));
             } else if (cmd == CMD_TRIGGER_CHALLENGE) {
                 challenged = true;
             }

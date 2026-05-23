@@ -4,9 +4,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SOCKET_PAYLOAD_SIZE 10  // 1 + 1 + 8
-#define AUTH_CACHE_SIZE 268     // 4 + 128 + 128 + 8
-
 typedef enum __attribute__((packed)) {
     STATUS_UNVERIFIED = 1,
     STATUS_VERIFIED,

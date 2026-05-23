@@ -5,7 +5,7 @@
 // raw data to structure
 bool socket_payload_deserialize(const uint8_t* payload, size_t payload_len, SocketPayload* out) {
     if (payload == NULL || out == NULL) return false;
-    if (payload_len < SOCKET_PAYLOAD_SIZE) return false;
+    if (payload_len < sizeof(SocketPayload)) return false;
 
     memset(out, 0, sizeof(SocketPayload));
 
@@ -19,15 +19,15 @@ bool socket_payload_deserialize(const uint8_t* payload, size_t payload_len, Sock
 // structure to raw data
 int socket_payload_serialize(const SocketPayload* in, uint8_t* out_buffer, size_t out_buffer_len) {
     if (in == NULL || out_buffer == NULL) return -1;
-    if (out_buffer_len < SOCKET_PAYLOAD_SIZE) return -1;
+    if (out_buffer_len < sizeof(SocketPayload)) return -1;
 
-    memset(out_buffer, 0, SOCKET_PAYLOAD_SIZE);
+    memset(out_buffer, 0, sizeof(SocketPayload));
 
     out_buffer[0] = (uint8_t)in->status;
     out_buffer[1] = (uint8_t)in->has_elapsed;
     memcpy(&out_buffer[2], &in->elapsed, sizeof(uint64_t));
 
-    return SOCKET_PAYLOAD_SIZE;
+    return sizeof(SocketPayload);
 }
 
 bool socket_command_deserialize(const uint8_t* payload, size_t payload_len, SocketCommand* out) {
@@ -54,7 +54,7 @@ bool socket_command_deserialize(const uint8_t* payload, size_t payload_len, Sock
 
 bool auth_cache_deserialize(const uint8_t* in, size_t in_len, AuthCache* out) {
     if (in == NULL || out == NULL) return false;
-    if (in_len < AUTH_CACHE_SIZE) return false;
+    if (in_len < sizeof(AuthCache)) return false;
 
     memset(out, 0, sizeof(AuthCache));
 
@@ -71,14 +71,14 @@ bool auth_cache_deserialize(const uint8_t* in, size_t in_len, AuthCache* out) {
 
 int auth_cache_serialize(const AuthCache* in, uint8_t* out, size_t out_len) {
     if (in == NULL || out == NULL) return -1;
-    if (out_len < AUTH_CACHE_SIZE) return -1;
+    if (out_len < sizeof(AuthCache)) return -1;
 
-    memset(out, 0, AUTH_CACHE_SIZE);
+    memset(out, 0, sizeof(AuthCache));
 
     memcpy(&out[0], &in->uid, sizeof(uint32_t));
     memcpy(&out[4], &in->tty, sizeof(char[128]));
     memcpy(&out[132], &in->service, sizeof(char[128]));
     memcpy(&out[260], &in->expires_at, sizeof(int64_t));
 
-    return AUTH_CACHE_SIZE;
+    return sizeof(AuthCache);
 }
