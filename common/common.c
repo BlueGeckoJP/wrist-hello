@@ -47,6 +47,9 @@ bool socket_command_deserialize(const uint8_t* payload, size_t payload_len, Sock
         case CMD_ADD_AUTH_CACHE:
             *out = CMD_ADD_AUTH_CACHE;
             return true;
+        case CMD_VERIFY:
+            *out = CMD_VERIFY;
+            return true;
         default:
             return false;
     }

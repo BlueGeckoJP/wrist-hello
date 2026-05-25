@@ -26,7 +26,8 @@ typedef enum __attribute__((packed)) {
     CMD_CHECK_STATUS = 1,
     CMD_TRIGGER_CHALLENGE,
     CMD_HAS_VALID_CACHE,
-    CMD_ADD_AUTH_CACHE
+    CMD_ADD_AUTH_CACHE,
+    CMD_VERIFY
 } SocketCommand;
 
 bool socket_command_deserialize(const uint8_t* payload, size_t payload_len, SocketCommand* out);
@@ -40,3 +41,9 @@ typedef struct {
 
 bool auth_cache_deserialize(const uint8_t* in, size_t in_len, AuthCache* out);
 int auth_cache_serialize(const AuthCache* in, uint8_t* out, size_t out_len);
+
+typedef struct {
+    uint32_t uid;
+    char tty[128];
+    char service[128];
+} AuthIdentity;
