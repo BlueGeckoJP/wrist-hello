@@ -81,7 +81,7 @@ int open_socket(const char* socket_path) {
 }
 
 int handle_authentication(pam_handle_t* pamh) {
-    AuthCache cache;
+    AuthCache cache = {0};
     int cache_result = get_auth_cache(pamh, &cache);
     if (cache_result != PAM_SUCCESS) return cache_result;
 
