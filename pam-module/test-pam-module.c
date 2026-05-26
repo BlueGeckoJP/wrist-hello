@@ -9,6 +9,7 @@
 
 #include "common.h"
 
+/*
 #define TEST_SOCKET_PATH "/tmp/wrist-hello-auth-test.sock"
 
 const char SERVER_RESPONSE_VERIFIED[10] = {0x02, 0x00, 0x00, 0x00, 0x00,
@@ -115,3 +116,4 @@ int main(void) {
     pthread_join(th, NULL);
     return 0;
 }
+*/

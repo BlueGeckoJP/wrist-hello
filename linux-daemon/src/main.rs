@@ -3,13 +3,11 @@ mod bindings {
 }
 mod auth_caches;
 mod challenge_char;
+mod pending_notifications;
 mod response_char;
 mod socket_server;
 
-use std::sync::{
-    Arc, RwLock,
-    atomic::{AtomicBool, AtomicU64},
-};
+use std::sync::{Arc, RwLock, atomic::AtomicBool};
 
 use bluer::{
     Uuid,
@@ -20,7 +18,10 @@ use tokio::sync::Notify;
 use tracing::{error, info};
 use xdg::BaseDirectories;
 
-use crate::{auth_caches::AuthCaches, socket_server::SocketServer};
+use crate::{
+    auth_caches::AuthCaches, pending_notifications::PendingNotifications,
+    socket_server::SocketServer,
+};
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
@@ -78,12 +79,11 @@ async fn main() -> bluer::Result<()> {
     let challenge_trigger_notify = challenge_trigger.clone();
     let challenge_trigger_socket = challenge_trigger.clone();
 
-    let last_verified_at = Arc::new(AtomicU64::new(0));
-    let last_verified_at_verify = last_verified_at.clone();
-
     let is_first_notify = Arc::new(AtomicBool::new(true));
     let is_first_notify_notify = is_first_notify.clone();
     let is_first_notify_cmd = is_first_notify.clone();
+
+    let pending_notifications = PendingNotifications::default();
 
     let app = Application {
         services: vec![Service {
@@ -97,7 +97,7 @@ async fn main() -> bluer::Result<()> {
                 ),
                 response_char::generate_response_char(
                     challenge_verify,
-                    last_verified_at_verify,
+                    pending_notifications.clone(),
                     app_config.public_key_der_hex.clone(),
                 ),
             ],
@@ -123,10 +123,10 @@ async fn main() -> bluer::Result<()> {
     let auth_caches = AuthCaches::default();
 
     let socket_server = Arc::new(SocketServer::new(
-        last_verified_at,
         challenge_trigger_socket,
         is_first_notify_cmd,
         auth_caches,
+        pending_notifications,
     ));
 
     tokio::spawn(async move {

@@ -10,6 +10,7 @@
 #include <sys/time.h>
 #include <sys/un.h>
 #include <syslog.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "common.h"
@@ -18,7 +19,7 @@
 #define BUF_SIZE 256
 #define AUTH_CACHE_TTL 60
 
-int get_auth_identity(pam_handle_t* pamh, AuthIdentity* identity) {
+int get_auth_cache(pam_handle_t* pamh, AuthCache* cache) {
     const char* user = NULL;
     const char* tty = NULL;
     const char* service = NULL;
@@ -35,21 +36,24 @@ int get_auth_identity(pam_handle_t* pamh, AuthIdentity* identity) {
     if (!pw) {
         return PAM_USER_UNKNOWN;
     }
-    identity->uid = pw->pw_uid;
+    cache->uid = pw->pw_uid;
 
     if (tty) {
-        strncpy(identity->tty, tty, sizeof(identity->tty) - 1);
-        identity->tty[sizeof(identity->tty) - 1] = '\0';
+        strncpy(cache->tty, tty, sizeof(cache->tty) - 1);
+        cache->tty[sizeof(cache->tty) - 1] = '\0';
     } else {
-        identity->tty[0] = '\0';
+        cache->tty[0] = '\0';
     }
 
     if (service) {
-        strncpy(identity->service, service, sizeof(identity->service) - 1);
-        identity->service[sizeof(identity->service) - 1] = '\0';
+        strncpy(cache->service, service, sizeof(cache->service) - 1);
+        cache->service[sizeof(cache->service) - 1] = '\0';
     } else {
-        identity->service[0] = '\0';
+        cache->service[0] = '\0';
     }
+
+    time_t now = time(NULL);
+    cache->expires_at = now + AUTH_CACHE_TTL;
 
     return PAM_SUCCESS;
 }
@@ -59,9 +63,9 @@ int open_socket(const char* socket_path) {
     if (fd < 0) return -1;
 
     struct timeval tv;
-    tv.tv_sec = 1;
+    tv.tv_sec = 5;
     tv.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     struct sockaddr_un addr = {
         .sun_family = AF_UNIX,
@@ -77,25 +81,21 @@ int open_socket(const char* socket_path) {
 }
 
 int handle_authentication(pam_handle_t* pamh) {
-    AuthIdentity identity;
-    int identity_result = get_auth_identity(pamh, &identity);
-    if (identity_result != PAM_SUCCESS) return identity_result;
+    AuthCache cache;
+    int cache_result = get_auth_cache(pamh, &cache);
+    if (cache_result != PAM_SUCCESS) return cache_result;
 
     int fd = open_socket(SOCKET_PATH);
     if (fd < 0) return PAM_AUTH_ERR;
 
-    SocketCommand cmd = CMD_VERIFY;
-    ssize_t n = write(fd, &cmd, sizeof(cmd));
-    if (n < 0) return PAM_AUTH_ERR;
-
-    n = write(fd, &identity, sizeof(identity));
+    ssize_t n = write(fd, &cache, sizeof(cache));
     if (n < 0) return PAM_AUTH_ERR;
 
     char buf[64] = {0};
     n = recv(fd, buf, sizeof(bool), MSG_WAITALL);
     if (n <= 0) return PAM_AUTH_ERR;
 
-    return buf[0] == '1' ? PAM_SUCCESS : PAM_AUTH_ERR;
+    return buf[0] == 0 ? PAM_SUCCESS : PAM_AUTH_ERR;
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, const char** argv) {

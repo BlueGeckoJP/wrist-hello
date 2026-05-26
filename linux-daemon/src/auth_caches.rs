@@ -1,4 +1,5 @@
 use std::{
+    ffi::{CStr, c_char},
     mem::MaybeUninit,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},

@@ -1,10 +1,4 @@
-use std::{
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::SystemTime,
-};
+use std::sync::{Arc, RwLock};
 
 use bluer::gatt::local::{
     Characteristic, CharacteristicWrite, CharacteristicWriteMethod, ReqError,
@@ -16,11 +10,11 @@ use p256::{
 };
 use tracing::{error, info};
 
-use crate::RESPONSE_CHAR_UUID;
+use crate::{RESPONSE_CHAR_UUID, pending_notifications::PendingNotifications};
 
 pub fn generate_response_char(
     challenge_verify: Arc<RwLock<Vec<u8>>>,
-    last_verified_at: Arc<AtomicU64>,
+    pending_notifications: PendingNotifications,
     public_key_der_bytes: Vec<u8>,
 ) -> Characteristic {
     Characteristic {
@@ -34,8 +28,8 @@ pub fn generate_response_char(
                 Box::pin(handle_response_write(
                     new_value.clone(),
                     challenge_verify.clone(),
-                    last_verified_at.clone(),
                     public_key_der_bytes.clone(),
+                    pending_notifications.clone(),
                 ))
             })),
             ..Default::default()
@@ -47,8 +41,8 @@ pub fn generate_response_char(
 async fn handle_response_write(
     new_value: Vec<u8>,
     challenge_verify: Arc<RwLock<Vec<u8>>>,
-    last_verified_at: Arc<AtomicU64>,
     public_key_der_bytes: Vec<u8>,
+    pending_notifications: PendingNotifications,
 ) -> Result<(), ReqError> {
     let challenge = {
         let locked = challenge_verify.read().unwrap();
@@ -74,12 +68,14 @@ async fn handle_response_write(
     match verifying_key.verify(&challenge, &signature) {
         Ok(_) => {
             info!("Success");
-            let now = SystemTime::now();
-            let timestamp = now
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            last_verified_at.store(timestamp, Ordering::SeqCst);
+
+            match pending_notifications.notify_all() {
+                Ok(count) => info!("Notified {} pending notifications", count),
+                Err(e) => {
+                    error!("Error: Failed to notify: {}", e);
+                    return Err(ReqError::Failed);
+                }
+            }
 
             Ok(())
         }
