@@ -47,3 +47,6 @@ typedef struct {
     char tty[128];
     char service[128];
 } AuthIdentity;
+
+bool auth_identity_deserialize(const uint8_t* in, size_t in_len, AuthIdentity* out);
+int auth_identity_serialize(const AuthIdentity* in, uint8_t* out, size_t out_len);

@@ -1,5 +1,6 @@
 #include "common.h"
 
+#include <stdint.h>
 #include <string.h>
 
 // raw data to structure
@@ -84,4 +85,33 @@ int auth_cache_serialize(const AuthCache* in, uint8_t* out, size_t out_len) {
     memcpy(&out[260], &in->expires_at, sizeof(int64_t));
 
     return sizeof(AuthCache);
+}
+
+bool auth_identity_deserialize(const uint8_t* in, size_t in_len, AuthIdentity* out) {
+    if (in == NULL || out == NULL) return false;
+    if (in_len < sizeof(AuthIdentity)) return false;
+
+    memset(out, 0, sizeof(AuthIdentity));
+
+    memcpy(&out->uid, &in[0], sizeof(uint32_t));
+    memcpy(&out->tty, &in[4], sizeof(char[128]));
+    memcpy(&out->service, &in[132], sizeof(char[128]));
+
+    out->tty[127] = '\0';
+    out->service[127] = '\0';
+
+    return true;
+}
+
+int auth_identity_serialize(const AuthIdentity* in, uint8_t* out, size_t out_len) {
+    if (in == NULL || out == NULL) return -1;
+    if (out_len < sizeof(AuthIdentity)) return -1;
+
+    memset(out, 0, sizeof(AuthIdentity));
+
+    memcpy(&out[0], &in->uid, sizeof(uint32_t));
+    memcpy(&out[4], &in->tty, sizeof(char[128]));
+    memcpy(&out[132], &in->service, sizeof(char[128]));
+
+    return sizeof(AuthIdentity);
 }
