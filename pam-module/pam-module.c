@@ -86,14 +86,25 @@ int handle_authentication(pam_handle_t* pamh) {
     if (cache_result != PAM_SUCCESS) return cache_result;
 
     int fd = open_socket(SOCKET_PATH);
-    if (fd < 0) return PAM_AUTH_ERR;
+    if (fd < 0) {
+        pam_syslog(pamh, LOG_ERR, "Failed to connect to UNIX socket server");
+        return PAM_AUTH_ERR;
+    }
 
     ssize_t n = write(fd, &cache, sizeof(cache));
-    if (n < 0) return PAM_AUTH_ERR;
+    if (n < 0) {
+        pam_syslog(pamh, LOG_ERR, "Failed to write auth cache to UNIX socket server");
+        close(fd);
+        return PAM_AUTH_ERR;
+    }
 
     char buf[64] = {0};
     n = recv(fd, buf, sizeof(bool), MSG_WAITALL);
-    if (n <= 0) return PAM_AUTH_ERR;
+    if (n <= 0) {
+        close(fd);
+        pam_syslog(pamh, LOG_ERR, "Failed to receive response from UNIX socket server");
+        return PAM_AUTH_ERR;
+    }
 
     return buf[0] == 0 ? PAM_SUCCESS : PAM_AUTH_ERR;
 }
