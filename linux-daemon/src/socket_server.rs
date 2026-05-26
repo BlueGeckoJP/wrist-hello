@@ -1,5 +1,5 @@
 use std::{
-    mem,
+    mem::{self, MaybeUninit},
     os::fd::AsRawFd,
     sync::{
         Arc,
@@ -16,29 +16,29 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-use crate::{auth_caches::AuthCaches, bindings, pending_notifications::PendingNotifications};
+use crate::{auth_session::AuthSession, bindings, pending_notifications::PendingNotifications};
 
 const SOCKET_PATH: &str = "/run/wrist-hello/auth.sock";
 
 pub struct SocketServer {
     challenge_trigger: Arc<Notify>,
     is_first_notify: Arc<AtomicBool>,
-    auth_caches: AuthCaches,
     pending_notifications: PendingNotifications,
+    auth_session: AuthSession,
 }
 
 impl SocketServer {
     pub fn new(
         challenge_trigger: Arc<Notify>,
         is_first_notify: Arc<AtomicBool>,
-        auth_caches: AuthCaches,
         pending_notifications: PendingNotifications,
+        auth_session: AuthSession,
     ) -> Self {
         Self {
             challenge_trigger,
             is_first_notify,
-            auth_caches,
             pending_notifications,
+            auth_session,
         }
     }
 
@@ -79,7 +79,7 @@ impl SocketServer {
     }
 
     async fn handle_verify(&self, stream: &mut UnixStream) {
-        let mut buf = [0u8; mem::size_of::<bindings::AuthCache>()];
+        let mut buf = [0u8; mem::size_of::<bindings::AuthIdentity>()];
         let n = match stream.read_exact(&mut buf).await {
             Ok(0) => {
                 info!("Client disconnected");
@@ -91,59 +91,59 @@ impl SocketServer {
                 return;
             }
         };
-
-        if let Ok(auth_cache) = self.auth_caches.verify_auth_cache(&buf[..n]) {
-            info!(
-                "Auth cache verified: uid={}, tty={}, service={}, expires_at={}",
-                auth_cache.uid,
-                Self::c_bytes_to_string(&auth_cache.tty),
-                Self::c_bytes_to_string(&auth_cache.service),
-                auth_cache.expires_at
-            );
-        } else {
-            let notify = Arc::new(Notify::new());
-            if let Err(e) = self.pending_notifications.add_one(notify.clone()) {
-                error!("Failed to add notify to pending notifications: {}", e);
+        let auth_identity = match Self::raw_to_auth_identity(&buf[..n]) {
+            Ok(identity) => identity,
+            Err(e) => {
+                error!("{}", e);
                 return;
             }
+        };
 
-            if self.is_first_notify.load(Ordering::SeqCst) {
-                warn!("First notify, skipping challenge trigger");
-            } else {
-                info!("Triggering challenge");
-                self.challenge_trigger.notify_one();
+        if let Ok(true) = self.auth_session.is_verified() {
+            info!("Session already verified, skipping verification");
+            if let Err(e) = Self::reply_to_stream(stream, &[0u8]).await {
+                error!("Failed to send already verified response to client: {}", e);
             }
+            return;
+        }
 
-            match timeout(Duration::from_secs(5), notify.notified()).await {
-                Ok(_) => info!("Received verification notification"),
-                Err(e) => {
-                    error!("Failed to wait for verification notification: {}", e);
-                    return;
-                }
+        let notify = Arc::new(Notify::new());
+        if let Err(e) = self.pending_notifications.add_one(notify.clone()) {
+            error!("Failed to add notify to pending notifications: {}", e);
+            return;
+        }
+
+        if self.is_first_notify.load(Ordering::SeqCst) {
+            warn!("First notify, skipping challenge trigger");
+        } else {
+            info!("Triggering challenge");
+            self.challenge_trigger.notify_one();
+        }
+
+        match timeout(Duration::from_secs(5), notify.notified()).await {
+            Ok(_) => info!("Received verification notification"),
+            Err(e) => {
+                error!("Failed to wait for verification notification: {}", e);
+                return;
             }
         }
 
-        if let Err(e) = stream.write_all(&[0u8]).await {
-            error!(
-                "Failed to send verification failure response to client: {}",
-                e
-            );
+        if let Err(e) = Self::reply_to_stream(stream, &[0u8]).await {
+            error!("Failed to send verification response to client: {}", e);
         }
 
-        if let Err(e) = stream.flush().await {
-            error!("Failed to flush response to client: {}", e);
-        }
+        info!(
+            "Verified client: uid={}, tty={}, service={}",
+            auth_identity.uid,
+            Self::c_bytes_to_string(&auth_identity.tty),
+            Self::c_bytes_to_string(&auth_identity.service)
+        );
+    }
 
-        self.auth_caches.put(&buf[..n]).unwrap_or_else(|e| {
-            error!("Failed to update auth cache timestamp: {}", e);
-        });
-
-        if let Ok(length) = self.auth_caches.inner_length()
-            && length > 100
-            && let Err(e) = self.auth_caches.remove_expired_caches()
-        {
-            error!("Failed to remove expired auth caches: {}", e);
-        }
+    async fn reply_to_stream(stream: &mut UnixStream, response: &[u8]) -> eyre::Result<()> {
+        stream.write_all(response).await?;
+        stream.flush().await?;
+        Ok(())
     }
 
     fn is_peer_root(stream: &UnixStream) -> eyre::Result<bool> {
@@ -172,5 +172,21 @@ impl SocketServer {
     fn c_bytes_to_string(cbytes: &[i8]) -> String {
         let cstr = unsafe { std::ffi::CStr::from_ptr(cbytes.as_ptr() as *const i8) };
         cstr.to_string_lossy().into_owned()
+    }
+
+    fn raw_to_auth_identity(raw: &[u8]) -> eyre::Result<bindings::AuthIdentity> {
+        let mut auth_identity_uninit = MaybeUninit::<bindings::AuthIdentity>::uninit();
+
+        unsafe {
+            if !bindings::auth_identity_deserialize(
+                raw.as_ptr(),
+                raw.len(),
+                auth_identity_uninit.as_mut_ptr(),
+            ) {
+                eyre::bail!("Failed to deserialize AuthIdentity");
+            }
+
+            Ok(auth_identity_uninit.assume_init())
+        }
     }
 }

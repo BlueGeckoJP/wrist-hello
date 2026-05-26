@@ -8,7 +8,6 @@ typedef struct {
     uint32_t uid;
     char tty[128];
     char service[128];
-    int64_t expires_at;
-} AuthCache;
+} AuthIdentity;
 
-bool auth_cache_deserialize(const uint8_t* in, size_t in_len, AuthCache* out);
+bool auth_identity_deserialize(const uint8_t* in, size_t in_len, AuthIdentity* out);

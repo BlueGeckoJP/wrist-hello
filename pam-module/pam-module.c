@@ -10,16 +10,15 @@
 #include <sys/time.h>
 #include <sys/un.h>
 #include <syslog.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "common.h"
 
 #define SOCKET_PATH "/run/wrist-hello/auth.sock"
 #define BUF_SIZE 256
-#define AUTH_CACHE_TTL 60
+// #define AUTH_CACHE_TTL 60
 
-int get_auth_cache(pam_handle_t* pamh, AuthCache* cache) {
+int get_auth_identity(pam_handle_t* pamh, AuthIdentity* identity) {
     const char* user = NULL;
     const char* tty = NULL;
     const char* service = NULL;
@@ -36,24 +35,21 @@ int get_auth_cache(pam_handle_t* pamh, AuthCache* cache) {
     if (!pw) {
         return PAM_USER_UNKNOWN;
     }
-    cache->uid = pw->pw_uid;
+    identity->uid = pw->pw_uid;
 
     if (tty) {
-        strncpy(cache->tty, tty, sizeof(cache->tty) - 1);
-        cache->tty[sizeof(cache->tty) - 1] = '\0';
+        strncpy(identity->tty, tty, sizeof(identity->tty) - 1);
+        identity->tty[sizeof(identity->tty) - 1] = '\0';
     } else {
-        cache->tty[0] = '\0';
+        identity->tty[0] = '\0';
     }
 
     if (service) {
-        strncpy(cache->service, service, sizeof(cache->service) - 1);
-        cache->service[sizeof(cache->service) - 1] = '\0';
+        strncpy(identity->service, service, sizeof(identity->service) - 1);
+        identity->service[sizeof(identity->service) - 1] = '\0';
     } else {
-        cache->service[0] = '\0';
+        identity->service[0] = '\0';
     }
-
-    time_t now = time(NULL);
-    cache->expires_at = now + AUTH_CACHE_TTL;
 
     return PAM_SUCCESS;
 }
@@ -81,9 +77,9 @@ int open_socket(const char* socket_path) {
 }
 
 int handle_authentication(pam_handle_t* pamh) {
-    AuthCache cache = {0};
-    int cache_result = get_auth_cache(pamh, &cache);
-    if (cache_result != PAM_SUCCESS) return cache_result;
+    AuthIdentity identity = {0};
+    int identity_result = get_auth_identity(pamh, &identity);
+    if (identity_result != PAM_SUCCESS) return identity_result;
 
     int fd = open_socket(SOCKET_PATH);
     if (fd < 0) {
@@ -91,9 +87,9 @@ int handle_authentication(pam_handle_t* pamh) {
         return PAM_AUTH_ERR;
     }
 
-    ssize_t n = write(fd, &cache, sizeof(cache));
+    ssize_t n = write(fd, &identity, sizeof(identity));
     if (n < 0) {
-        pam_syslog(pamh, LOG_ERR, "Failed to write auth cache to UNIX socket server");
+        pam_syslog(pamh, LOG_ERR, "Failed to write auth identity to UNIX socket server");
         close(fd);
         return PAM_AUTH_ERR;
     }

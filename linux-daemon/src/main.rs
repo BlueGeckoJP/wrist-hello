@@ -1,7 +1,7 @@
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
-mod auth_caches;
+mod auth_session;
 mod challenge_char;
 mod pending_notifications;
 mod response_char;
@@ -19,7 +19,7 @@ use tracing::{error, info};
 use xdg::BaseDirectories;
 
 use crate::{
-    auth_caches::AuthCaches, pending_notifications::PendingNotifications,
+    auth_session::AuthSession, pending_notifications::PendingNotifications,
     socket_server::SocketServer,
 };
 
@@ -84,6 +84,7 @@ async fn main() -> bluer::Result<()> {
     let is_first_notify_cmd = is_first_notify.clone();
 
     let pending_notifications = PendingNotifications::default();
+    let auth_session = AuthSession::default();
 
     let app = Application {
         services: vec![Service {
@@ -98,6 +99,7 @@ async fn main() -> bluer::Result<()> {
                 response_char::generate_response_char(
                     challenge_verify,
                     pending_notifications.clone(),
+                    auth_session.clone(),
                     app_config.public_key_der_hex.clone(),
                 ),
             ],
@@ -120,13 +122,11 @@ async fn main() -> bluer::Result<()> {
     let _adv_handle = adapter.advertise(le_advertisement).await?;
     info!("Advertising started");
 
-    let auth_caches = AuthCaches::default();
-
     let socket_server = Arc::new(SocketServer::new(
         challenge_trigger_socket,
         is_first_notify_cmd,
-        auth_caches,
         pending_notifications,
+        auth_session,
     ));
 
     tokio::spawn(async move {

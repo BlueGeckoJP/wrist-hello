@@ -10,11 +10,14 @@ use p256::{
 };
 use tracing::{error, info};
 
-use crate::{RESPONSE_CHAR_UUID, pending_notifications::PendingNotifications};
+use crate::{
+    RESPONSE_CHAR_UUID, auth_session::AuthSession, pending_notifications::PendingNotifications,
+};
 
 pub fn generate_response_char(
     challenge_verify: Arc<RwLock<Vec<u8>>>,
     pending_notifications: PendingNotifications,
+    auth_session: AuthSession,
     public_key_der_bytes: Vec<u8>,
 ) -> Characteristic {
     Characteristic {
@@ -30,6 +33,7 @@ pub fn generate_response_char(
                     challenge_verify.clone(),
                     public_key_der_bytes.clone(),
                     pending_notifications.clone(),
+                    auth_session.clone(),
                 ))
             })),
             ..Default::default()
@@ -43,6 +47,7 @@ async fn handle_response_write(
     challenge_verify: Arc<RwLock<Vec<u8>>>,
     public_key_der_bytes: Vec<u8>,
     pending_notifications: PendingNotifications,
+    auth_session: AuthSession,
 ) -> Result<(), ReqError> {
     let challenge = {
         let locked = challenge_verify.read().unwrap();
@@ -68,6 +73,14 @@ async fn handle_response_write(
     match verifying_key.verify(&challenge, &signature) {
         Ok(_) => {
             info!("Success");
+
+            match auth_session.mark_verified() {
+                Ok(_) => info!("Marked session as verified"),
+                Err(e) => {
+                    error!("Error: Failed to notify: {}", e);
+                    return Err(ReqError::Failed);
+                }
+            }
 
             match pending_notifications.notify_all() {
                 Ok(count) => info!("Notified {} pending notifications", count),
