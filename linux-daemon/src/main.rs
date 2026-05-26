@@ -72,17 +72,8 @@ async fn main() -> bluer::Result<()> {
     info!("Adapter powered on");
 
     let current_challenge = Arc::new(RwLock::new(vec![0u8; 32]));
-    let challenge_read = current_challenge.clone();
-    let challenge_verify = current_challenge.clone();
-
     let challenge_trigger = Arc::new(Notify::new());
-    let challenge_trigger_notify = challenge_trigger.clone();
-    let challenge_trigger_socket = challenge_trigger.clone();
-
     let is_first_notify = Arc::new(AtomicBool::new(true));
-    let is_first_notify_notify = is_first_notify.clone();
-    let is_first_notify_cmd = is_first_notify.clone();
-
     let pending_notifications = PendingNotifications::default();
     let auth_session = AuthSession::default();
 
@@ -92,12 +83,12 @@ async fn main() -> bluer::Result<()> {
             primary: true,
             characteristics: vec![
                 challenge_char::generate_challenge_char(
-                    challenge_read,
-                    challenge_trigger_notify,
-                    is_first_notify_notify,
+                    current_challenge.clone(),
+                    challenge_trigger.clone(),
+                    is_first_notify.clone(),
                 ),
                 response_char::generate_response_char(
-                    challenge_verify,
+                    current_challenge.clone(),
                     pending_notifications.clone(),
                     auth_session.clone(),
                     app_config.public_key_der_hex.clone(),
@@ -123,8 +114,8 @@ async fn main() -> bluer::Result<()> {
     info!("Advertising started");
 
     let socket_server = Arc::new(SocketServer::new(
-        challenge_trigger_socket,
-        is_first_notify_cmd,
+        challenge_trigger.clone(),
+        is_first_notify.clone(),
         pending_notifications,
         auth_session,
     ));

@@ -170,7 +170,7 @@ impl SocketServer {
     }
 
     fn c_bytes_to_string(cbytes: &[i8]) -> String {
-        let cstr = unsafe { std::ffi::CStr::from_ptr(cbytes.as_ptr() as *const i8) };
+        let cstr = unsafe { std::ffi::CStr::from_ptr(cbytes.as_ptr()) };
         cstr.to_string_lossy().into_owned()
     }
 

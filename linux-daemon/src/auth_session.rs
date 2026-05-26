@@ -1,4 +1,7 @@
-use std::{sync::{Arc, Mutex}, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 const TTL_SECS: u64 = 60;
 
@@ -24,7 +27,6 @@ impl AuthSession {
             .duration_since(UNIX_EPOCH)
             .map_err(|_| eyre::eyre!("Failed to get current time"))?
             .as_secs();
-
 
         session_data.verified_at = now;
         session_data.expires_at = now + TTL_SECS;
