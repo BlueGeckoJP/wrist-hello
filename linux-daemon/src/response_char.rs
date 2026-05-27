@@ -13,6 +13,7 @@ use crate::{
     pending_notifications::PendingNotifications,
 };
 
+/// Generates the GATT characteristic for the authentication challenge response
 pub fn generate_response_char(
     current_challenge: CurrentChallenge,
     pending_notifications: PendingNotifications,
@@ -41,6 +42,7 @@ pub fn generate_response_char(
     }
 }
 
+/// Handles write requests for the response characteristic by verifying the signature sent by the wearos-app client
 async fn handle_response_write(
     new_value: Vec<u8>,
     current_challenge: CurrentChallenge,

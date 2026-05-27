@@ -12,6 +12,7 @@ use tracing::{error, info};
 
 use crate::{CHALLENGE_CHAR_UUID, current_challenge::CurrentChallenge};
 
+/// Generates the GATT characteristic for the authentication challenge
 pub fn generate_challenge_char(
     current_challenge: CurrentChallenge,
     challenge_trigger: Arc<Notify>,
@@ -50,6 +51,7 @@ pub fn generate_challenge_char(
     }
 }
 
+/// Handles read requests for the challenge characteristic by generating a new challenge
 async fn handle_challenge_read(current_challenge: CurrentChallenge) -> Result<Vec<u8>, ReqError> {
     let new_challenge = current_challenge.refresh().map_err(|e| {
         error!("READ: Failed to refresh challenge: {}", e);
@@ -60,6 +62,8 @@ async fn handle_challenge_read(current_challenge: CurrentChallenge) -> Result<Ve
     Ok(new_challenge.to_vec())
 }
 
+/// Handles notifications for the challenge characteristic by generating a new challenge and sending it to the wearos-app client
+/// Notifications to the wearos-app client are triggered via `challenge_trigger: Arc<Notify>`
 async fn handle_challenge_notify(
     mut notifier: CharacteristicNotifier,
     current_challenge: CurrentChallenge,
