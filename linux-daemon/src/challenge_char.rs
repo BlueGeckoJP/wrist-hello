@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, RwLock,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -7,14 +7,13 @@ use bluer::gatt::local::{
     Characteristic, CharacteristicNotifier, CharacteristicNotify, CharacteristicNotifyMethod,
     CharacteristicRead, ReqError,
 };
-use rand::RngExt;
 use tokio::sync::Notify;
 use tracing::{error, info};
 
-use crate::CHALLENGE_CHAR_UUID;
+use crate::{CHALLENGE_CHAR_UUID, current_challenge::CurrentChallenge};
 
 pub fn generate_challenge_char(
-    current_challenge: Arc<RwLock<Vec<u8>>>,
+    current_challenge: CurrentChallenge,
     challenge_trigger: Arc<Notify>,
     is_first_notify: Arc<AtomicBool>,
 ) -> Characteristic {
@@ -28,8 +27,7 @@ pub fn generate_challenge_char(
             encrypt_authenticated_read: true,
             fun: Box::new(move |req| {
                 info!("CHALLENGE_CHAR:READ: Connected from {}", req.device_address);
-                let state = challenge_for_read.clone();
-                Box::pin(handle_challenge_read(state))
+                Box::pin(handle_challenge_read(challenge_for_read.clone()))
             }),
             ..Default::default()
         }),
@@ -52,37 +50,30 @@ pub fn generate_challenge_char(
     }
 }
 
-async fn handle_challenge_read(challenge_read: Arc<RwLock<Vec<u8>>>) -> Result<Vec<u8>, ReqError> {
-    let new_challenge = {
-        let mut rng = rand::rngs::ThreadRng::default();
-        let mut ch = vec![0u8; 32];
-        rng.fill(ch.as_mut_slice());
-        ch
-    };
-
-    if let Ok(mut locked) = challenge_read.write() {
-        *locked = new_challenge.clone();
-    }
+async fn handle_challenge_read(current_challenge: CurrentChallenge) -> Result<Vec<u8>, ReqError> {
+    let new_challenge = current_challenge.refresh().map_err(|e| {
+        error!("READ: Failed to refresh challenge: {}", e);
+        ReqError::Failed
+    })?;
 
     info!("READ: Generated new challenge: {:?}", new_challenge);
-    Ok(new_challenge)
+    Ok(new_challenge.to_vec())
 }
 
 async fn handle_challenge_notify(
     mut notifier: CharacteristicNotifier,
-    challenge_notify: Arc<RwLock<Vec<u8>>>,
+    current_challenge: CurrentChallenge,
     challenge_trigger: Arc<Notify>,
     is_first_notify: Arc<AtomicBool>,
 ) {
-    let new_challenge = {
-        let mut rng = rand::rngs::ThreadRng::default();
-        let mut ch = vec![0u8; 32];
-        rng.fill(ch.as_mut_slice());
-        ch
+    let new_challenge = match current_challenge.refresh() {
+        Ok(ch) => ch.to_vec(),
+        Err(e) => {
+            error!("NOTIFY: Failed to refresh challenge: {}", e);
+            return;
+        }
     };
-    if let Ok(mut locked) = challenge_notify.write() {
-        *locked = new_challenge.clone();
-    }
+
     info!("NOTIFY: Generated new challenge: {:?}", new_challenge);
     if notifier.notify(new_challenge).await.is_err() {
         error!("NOTIFY: Failed to send notification");
@@ -92,15 +83,14 @@ async fn handle_challenge_notify(
 
     loop {
         challenge_trigger.notified().await;
-        let new_challenge = {
-            let mut rng = rand::rngs::ThreadRng::default();
-            let mut ch = vec![0u8; 32];
-            rng.fill(ch.as_mut_slice());
-            ch
+        let new_challenge = match current_challenge.refresh() {
+            Ok(ch) => ch.to_vec(),
+            Err(e) => {
+                error!("NOTIFY: Failed to refresh challenge: {}", e);
+                return;
+            }
         };
-        if let Ok(mut locked) = challenge_notify.write() {
-            *locked = new_challenge.clone();
-        }
+
         info!("NOTIFY: Re-triggered challenge: {:?}", new_challenge);
         if notifier.notify(new_challenge).await.is_err() {
             error!("NOTIFY: Failed to send notification");

@@ -1,5 +1,3 @@
-use std::sync::{Arc, RwLock};
-
 use bluer::gatt::local::{
     Characteristic, CharacteristicWrite, CharacteristicWriteMethod, ReqError,
 };
@@ -11,11 +9,12 @@ use p256::{
 use tracing::{error, info};
 
 use crate::{
-    RESPONSE_CHAR_UUID, auth_session::AuthSession, pending_notifications::PendingNotifications,
+    RESPONSE_CHAR_UUID, auth_session::AuthSession, current_challenge::CurrentChallenge,
+    pending_notifications::PendingNotifications,
 };
 
 pub fn generate_response_char(
-    challenge_verify: Arc<RwLock<Vec<u8>>>,
+    current_challenge: CurrentChallenge,
     pending_notifications: PendingNotifications,
     auth_session: AuthSession,
     public_key_der_bytes: Vec<u8>,
@@ -30,7 +29,7 @@ pub fn generate_response_char(
                 info!("RESPONSE_CHAR:WRITE: Connected from {}", req.device_address);
                 Box::pin(handle_response_write(
                     new_value.clone(),
-                    challenge_verify.clone(),
+                    current_challenge.clone(),
                     public_key_der_bytes.clone(),
                     pending_notifications.clone(),
                     auth_session.clone(),
@@ -44,14 +43,17 @@ pub fn generate_response_char(
 
 async fn handle_response_write(
     new_value: Vec<u8>,
-    challenge_verify: Arc<RwLock<Vec<u8>>>,
+    current_challenge: CurrentChallenge,
     public_key_der_bytes: Vec<u8>,
     pending_notifications: PendingNotifications,
     auth_session: AuthSession,
 ) -> Result<(), ReqError> {
-    let challenge = {
-        let locked = challenge_verify.read().unwrap();
-        locked.clone()
+    let challenge = match current_challenge.take() {
+        Ok(ch) => ch,
+        Err(e) => {
+            error!("Error: Failed to get current challenge: {}", e);
+            return Err(ReqError::Failed);
+        }
     };
 
     let verifying_key = match VerifyingKey::from_public_key_der(&public_key_der_bytes) {

@@ -3,11 +3,12 @@ mod bindings {
 }
 mod auth_session;
 mod challenge_char;
+mod current_challenge;
 mod pending_notifications;
 mod response_char;
 mod socket_server;
 
-use std::sync::{Arc, RwLock, atomic::AtomicBool};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use bluer::{
     Uuid,
@@ -19,8 +20,8 @@ use tracing::{error, info};
 use xdg::BaseDirectories;
 
 use crate::{
-    auth_session::AuthSession, pending_notifications::PendingNotifications,
-    socket_server::SocketServer,
+    auth_session::AuthSession, current_challenge::CurrentChallenge,
+    pending_notifications::PendingNotifications, socket_server::SocketServer,
 };
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
@@ -71,7 +72,7 @@ async fn main() -> bluer::Result<()> {
     adapter.set_powered(true).await?;
     info!("Adapter powered on");
 
-    let current_challenge = Arc::new(RwLock::new(vec![0u8; 32]));
+    let current_challenge = CurrentChallenge::default();
     let challenge_trigger = Arc::new(Notify::new());
     let is_first_notify = Arc::new(AtomicBool::new(true));
     let pending_notifications = PendingNotifications::default();
