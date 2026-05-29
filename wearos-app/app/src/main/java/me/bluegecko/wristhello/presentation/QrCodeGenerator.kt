@@ -2,11 +2,11 @@ package me.bluegecko.wristhello.presentation
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.set
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
-import androidx.core.graphics.createBitmap
-import androidx.core.graphics.set
 
 fun generateQrCode(
     content: String,

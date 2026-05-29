@@ -22,6 +22,21 @@ class ForegroundService : Service() {
 
     private lateinit var bleManager: BleManager
     private var reconnectJob: Job? = null
+    private var reconnectRequested = false
+
+    private fun requestReconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+
+        reconnectRequested = true
+
+        if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            stopSelf()
+            return
+        }
+
+        bleManager.disconnect()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -39,6 +54,8 @@ class ForegroundService : Service() {
 
         scope.launch {
             bleManager.bleState.collect { state ->
+                BleServiceState.update(state)
+
                 when (state) {
                     BleState.Connecting -> {
                         updateNotification("BLE connecting...")
@@ -52,7 +69,13 @@ class ForegroundService : Service() {
 
                     BleState.Disconnected -> {
                         updateNotification("BLE reconnecting...")
-                        scheduleReconnect()
+
+                        if (reconnectRequested) {
+                            reconnectRequested = false
+                            connectIfPossible()
+                        } else {
+                            scheduleReconnect()
+                        }
                     }
 
                     is BleState.Error -> {
@@ -64,8 +87,14 @@ class ForegroundService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
-        connectIfPossible()
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_RECONNECT -> {
+                requestReconnect()
+            }
+
+            else -> connectIfPossible()
+        }
         return START_STICKY
     }
 
@@ -157,5 +186,6 @@ class ForegroundService : Service() {
         private const val CHALLENGE_CHANNEL_ID = "challenge_alerts"
         private const val NOTIFICATION_ID = 1001
         private const val CHALLENGE_NOTIFICATION_ID = 1002
+        const val ACTION_RECONNECT = "me.bluegecko.wristhello.action.RECONNECT"
     }
 }

@@ -55,6 +55,10 @@ class BleManager(
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun connectToPairedDevice() {
+        if (_bleState.value is BleState.Connecting || _bleState.value is BleState.Connected) {
+            return
+        }
+
         val target: BluetoothDevice? = findDeviceByServiceUuid(context, SERVICE_UUID)
         if (target == null) {
             _bleState.value = BleState.Error("No paired device found")
@@ -62,12 +66,17 @@ class BleManager(
         }
 
         _bleState.value = BleState.Connecting
-        target.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        gatt = target.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun disconnect() {
-        gatt?.disconnect()
+        val currentGatt = gatt
+        if (currentGatt == null) {
+            _bleState.value = BleState.Disconnected
+            return
+        }
+        currentGatt.disconnect()
     }
 
     private val gattCallback = object : BluetoothGattCallback() {

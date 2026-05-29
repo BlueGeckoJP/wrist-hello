@@ -1,32 +1,24 @@
 package me.bluegecko.wristhello.presentation
 
 import android.app.Application
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val keyStoreManager = KeystoreManager()
-    private val bleManager = BleManager(app, keyStoreManager)
+    val bleState: StateFlow<BleState> = BleServiceState.bleState
 
-    val bleState: StateFlow<BleState> = bleManager.bleState.stateIn(
-        viewModelScope, SharingStarted.Lazily,
-        BleState.Disconnected
-    )
-
-    @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
-    fun connect() {
-        viewModelScope.launch {
-            bleManager.connectToPairedDevice()
-        }
-    }
-
-    @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
-    fun disconnect() {
-        bleManager.disconnect()
+    fun reconnect() {
+        val context = getApplication<Application>()
+        ContextCompat.startForegroundService(
+            context,
+            Intent(
+                context,
+                ForegroundService::class.java
+            ).setAction(ForegroundService.ACTION_RECONNECT)
+        )
     }
 
     fun getPublicKey(): ByteArray {
