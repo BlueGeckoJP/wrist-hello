@@ -101,6 +101,7 @@ int handle_authentication(pam_handle_t* pamh) {
         return PAM_AUTH_ERR;
     }
 
+    close(fd);
     return buf[0] == 0 ? PAM_SUCCESS : PAM_AUTH_ERR;
 }
 
