@@ -16,7 +16,6 @@
 
 #define SOCKET_PATH "/run/wrist-hello/auth.sock"
 #define BUF_SIZE 256
-// #define AUTH_CACHE_TTL 60
 
 int get_auth_identity(pam_handle_t* pamh, AuthIdentity* identity) {
     const char* user = NULL;

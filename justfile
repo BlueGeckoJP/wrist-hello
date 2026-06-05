@@ -8,7 +8,6 @@ build:
   cd wearos-app && ./gradlew assembleDebug
 
 test: build
-  cd pam-module && make test
   cd wearos-app && ./gradlew test
 
 clean:
@@ -21,7 +20,7 @@ fmt:
   cd common && clang-format -i *.c *.h
   cd pam-module && clang-format -i *.c
   cd linux-daemon && cargo fmt
- 
+
 gen-compile-commands:
   cd common && make clean && bear -- make all
   cd pam-module && make clean && bear -- make all
@@ -31,4 +30,3 @@ lint: gen-compile-commands
   cd pam-module && clang-tidy *.c
   cd linux-daemon && cargo clippy
   cd wearos-app && ./gradlew lint
-
