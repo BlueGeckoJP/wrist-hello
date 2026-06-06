@@ -118,6 +118,12 @@ impl SocketServer {
             if let Err(e) = self.pending_notifications.remove_one(notify) {
                 error!("Failed to remove notify from pending notifications: {}", e);
             }
+
+            // Reply immediately with failure so the client doesn't wait for SO_RCVTIMEO
+            if let Err(e) = Self::reply_to_stream(stream, &[1u8]).await {
+                error!("Failed to send failure response to client: {}", e);
+            }
+
             return;
         }
 
