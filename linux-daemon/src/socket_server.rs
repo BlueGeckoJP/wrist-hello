@@ -22,23 +22,23 @@ const SOCKET_PATH: &str = "/run/wrist-hello/auth.sock";
 
 pub struct SocketServer {
     challenge_trigger: Arc<Notify>,
-    is_first_notify: Arc<AtomicBool>,
     pending_notifications: PendingNotifications,
     auth_session: AuthSession,
+    notify_ready: Arc<AtomicBool>,
 }
 
 impl SocketServer {
     pub fn new(
         challenge_trigger: Arc<Notify>,
-        is_first_notify: Arc<AtomicBool>,
         pending_notifications: PendingNotifications,
         auth_session: AuthSession,
+        notify_ready: Arc<AtomicBool>,
     ) -> Self {
         Self {
             challenge_trigger,
-            is_first_notify,
             pending_notifications,
             auth_session,
+            notify_ready,
         }
     }
 
@@ -113,12 +113,16 @@ impl SocketServer {
             return;
         }
 
-        if self.is_first_notify.load(Ordering::SeqCst) {
-            warn!("First notify, skipping challenge trigger");
-        } else {
-            info!("Triggering challenge");
-            self.challenge_trigger.notify_one();
+        if !self.notify_ready.load(Ordering::SeqCst) {
+            error!("Notify not ready, cannot trigger challenge");
+            if let Err(e) = self.pending_notifications.remove_one(notify) {
+                error!("Failed to remove notify from pending notifications: {}", e);
+            }
+            return;
         }
+
+        info!("Triggering challenge");
+        self.challenge_trigger.notify_one();
 
         match timeout(Duration::from_secs(5), notify.notified()).await {
             Ok(_) => info!("Received verification notification"),
