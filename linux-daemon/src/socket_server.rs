@@ -124,6 +124,9 @@ impl SocketServer {
             Ok(_) => info!("Received verification notification"),
             Err(e) => {
                 error!("Failed to wait for verification notification: {}", e);
+                if let Err(e) = self.pending_notifications.remove_one(notify) {
+                    error!("Failed to remove notify from pending notifications: {}", e);
+                }
                 return;
             }
         }
@@ -138,6 +141,10 @@ impl SocketServer {
             Self::c_bytes_to_string(&auth_identity.tty),
             Self::c_bytes_to_string(&auth_identity.service)
         );
+
+        if let Err(e) = self.pending_notifications.remove_one(notify) {
+            error!("Failed to remove notify from pending notifications: {}", e);
+        }
     }
 
     async fn reply_to_stream(stream: &mut UnixStream, response: &[u8]) -> eyre::Result<()> {

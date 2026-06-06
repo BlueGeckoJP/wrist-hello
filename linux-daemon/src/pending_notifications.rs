@@ -32,4 +32,17 @@ impl PendingNotifications {
 
         Ok(count)
     }
+
+    pub fn remove_one(&self, notify: Arc<Notify>) -> eyre::Result<()> {
+        let mut inner = match self.inner.lock() {
+            Ok(inner) => inner,
+            Err(e) => eyre::bail!("Failed to lock pending notifications: {}", e),
+        };
+
+        if let Some(pos) = inner.iter().position(|n| Arc::ptr_eq(n, &notify)) {
+            inner.remove(pos);
+        }
+
+        Ok(())
+    }
 }
