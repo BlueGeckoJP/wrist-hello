@@ -28,11 +28,17 @@ const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef82
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
 const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6ce566a0a);
 
+fn default_auth_cache_ttl_seconds() -> Option<u64> {
+    Some(60)
+}
+
 #[derive(Deserialize)]
 struct AppConfig {
     public_key_der: String,
     #[serde(skip)]
     public_key_der_hex: Vec<u8>,
+    #[serde(default = "default_auth_cache_ttl_seconds")]
+    auth_cache_ttl_seconds: Option<u64>,
 }
 
 impl AppConfig {
@@ -76,7 +82,11 @@ async fn main() -> bluer::Result<()> {
     let challenge_trigger = Arc::new(Notify::new());
     let is_first_notify = Arc::new(AtomicBool::new(true));
     let pending_notifications = PendingNotifications::default();
-    let auth_session = AuthSession::default();
+    let auth_session = AuthSession::new(
+        app_config
+            .auth_cache_ttl_seconds
+            .expect("auth_cache_ttl_seconds must be set in config"),
+    );
 
     let app = Application {
         services: vec![Service {

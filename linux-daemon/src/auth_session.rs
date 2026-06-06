@@ -3,9 +3,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-/// Time-to-live for a verified session, in seconds
-const TTL_SECS: u64 = 60;
-
 #[derive(Default)]
 struct SessionData {
     verified_at: u64,
@@ -14,12 +11,20 @@ struct SessionData {
 
 /// Represents an authentication session for a user (authentication cache)
 /// It tracks when the session was verified and when it expires
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AuthSession {
     inner: Arc<Mutex<SessionData>>,
+    ttl_seconds: u64,
 }
 
 impl AuthSession {
+    pub fn new(ttl_seconds: u64) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(SessionData::default())),
+            ttl_seconds,
+        }
+    }
+
     /// Marks the session as verified, updating the verification and expiration times
     pub fn mark_verified(&self) -> eyre::Result<()> {
         let mut session_data = self
@@ -33,7 +38,7 @@ impl AuthSession {
             .as_secs();
 
         session_data.verified_at = now;
-        session_data.expires_at = now + TTL_SECS;
+        session_data.expires_at = now + self.ttl_seconds;
 
         Ok(())
     }
