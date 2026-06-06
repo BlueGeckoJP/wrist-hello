@@ -77,8 +77,12 @@ fun WearApp(viewModel: MainViewModel = viewModel()) {
             permissions[Manifest.permission.BLUETOOTH_CONNECT] == true || ContextCompat.checkSelfPermission(
                 context, Manifest.permission.BLUETOOTH_CONNECT
             ) == PackageManager.PERMISSION_GRANTED
+        val notificationsGranted =
+            permissions[Manifest.permission.POST_NOTIFICATIONS] == true || ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
 
-        if (bluetoothGranted) {
+        if (bluetoothGranted && notificationsGranted) {
             startBleService()
         }
     }
