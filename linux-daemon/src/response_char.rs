@@ -1,11 +1,3 @@
-use std::{
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::SystemTime,
-};
-
 use bluer::gatt::local::{
     Characteristic, CharacteristicWrite, CharacteristicWriteMethod, ReqError,
 };
@@ -16,11 +8,18 @@ use p256::{
 };
 use tracing::{error, info};
 
-use crate::RESPONSE_CHAR_UUID;
+use crate::{
+    RESPONSE_CHAR_UUID, auth_session::AuthSession, current_challenge::CurrentChallenge,
+    pending_notifications::PendingNotifications,
+};
 
+const DENY_RESPONSE_MARKER: u8 = 0x00;
+
+/// Generates the GATT characteristic for the authentication challenge response
 pub fn generate_response_char(
-    challenge_verify: Arc<RwLock<Vec<u8>>>,
-    last_verified_at: Arc<AtomicU64>,
+    current_challenge: CurrentChallenge,
+    pending_notifications: PendingNotifications,
+    auth_session: AuthSession,
     public_key_der_bytes: Vec<u8>,
 ) -> Characteristic {
     Characteristic {
@@ -33,9 +32,10 @@ pub fn generate_response_char(
                 info!("RESPONSE_CHAR:WRITE: Connected from {}", req.device_address);
                 Box::pin(handle_response_write(
                     new_value.clone(),
-                    challenge_verify.clone(),
-                    last_verified_at.clone(),
+                    current_challenge.clone(),
                     public_key_der_bytes.clone(),
+                    pending_notifications.clone(),
+                    auth_session.clone(),
                 ))
             })),
             ..Default::default()
@@ -44,15 +44,55 @@ pub fn generate_response_char(
     }
 }
 
+/// Handles writes to the response characteristic
+///
+/// A value starting with `0x00` followed by the current 32-byte
+/// challenge is treated as an explicit deny response from the
+/// wearos-app client. Otherwise, the value is treated as a DER-encoded ECDSA
+/// signature and verified against the current challenge
 async fn handle_response_write(
     new_value: Vec<u8>,
-    challenge_verify: Arc<RwLock<Vec<u8>>>,
-    last_verified_at: Arc<AtomicU64>,
+    current_challenge: CurrentChallenge,
     public_key_der_bytes: Vec<u8>,
+    pending_notifications: PendingNotifications,
+    auth_session: AuthSession,
 ) -> Result<(), ReqError> {
-    let challenge = {
-        let locked = challenge_verify.read().unwrap();
-        locked.clone()
+    if new_value.first() == Some(&DENY_RESPONSE_MARKER) {
+        if new_value.len() != 1 + 32 {
+            error!("Error: Invalid deny response length");
+            return Err(ReqError::Failed);
+        }
+
+        match current_challenge.take_if_matches(&new_value[1..]) {
+            Ok(true) => {}
+            Ok(false) => {
+                error!("Error: Deny response challenge does not match current challenge");
+                return Err(ReqError::Failed);
+            }
+            Err(e) => {
+                error!(
+                    "Error: Failed to get current challenge for deny response: {}",
+                    e
+                );
+                return Err(ReqError::Failed);
+            }
+        }
+
+        pending_notifications.fail_all().map_err(|e| {
+            error!("Error: Failed to fail pending notifications: {}", e);
+            ReqError::Failed
+        })?;
+
+        info!("Authentication denied by client");
+        return Ok(());
+    }
+
+    let challenge = match current_challenge.take() {
+        Ok(ch) => ch,
+        Err(e) => {
+            error!("Error: Failed to get current challenge: {}", e);
+            return Err(ReqError::Failed);
+        }
     };
 
     let verifying_key = match VerifyingKey::from_public_key_der(&public_key_der_bytes) {
@@ -74,12 +114,22 @@ async fn handle_response_write(
     match verifying_key.verify(&challenge, &signature) {
         Ok(_) => {
             info!("Success");
-            let now = SystemTime::now();
-            let timestamp = now
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            last_verified_at.store(timestamp, Ordering::SeqCst);
+
+            match auth_session.mark_verified() {
+                Ok(_) => info!("Marked session as verified"),
+                Err(e) => {
+                    error!("Error: Failed to mark session as verified: {}", e);
+                    return Err(ReqError::Failed);
+                }
+            }
+
+            match pending_notifications.notify_all() {
+                Ok(count) => info!("Notified {} pending notifications", count),
+                Err(e) => {
+                    error!("Error: Failed to notify pending notifications: {}", e);
+                    return Err(ReqError::Failed);
+                }
+            }
 
             Ok(())
         }

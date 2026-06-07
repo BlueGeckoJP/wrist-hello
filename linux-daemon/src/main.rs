@@ -1,15 +1,15 @@
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
-mod auth_caches;
+mod auth_session;
 mod challenge_char;
+mod current_challenge;
+mod notify_ready_guard;
+mod pending_notifications;
 mod response_char;
 mod socket_server;
 
-use std::sync::{
-    Arc, RwLock,
-    atomic::{AtomicBool, AtomicU64},
-};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use bluer::{
     Uuid,
@@ -20,17 +20,26 @@ use tokio::sync::Notify;
 use tracing::{error, info};
 use xdg::BaseDirectories;
 
-use crate::{auth_caches::AuthCaches, socket_server::SocketServer};
+use crate::{
+    auth_session::AuthSession, current_challenge::CurrentChallenge,
+    pending_notifications::PendingNotifications, socket_server::SocketServer,
+};
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
 const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6ce566a0a);
+
+fn default_auth_cache_ttl_seconds() -> Option<u64> {
+    Some(60)
+}
 
 #[derive(Deserialize)]
 struct AppConfig {
     public_key_der: String,
     #[serde(skip)]
     public_key_der_hex: Vec<u8>,
+    #[serde(default = "default_auth_cache_ttl_seconds")]
+    auth_cache_ttl_seconds: Option<u64>,
 }
 
 impl AppConfig {
@@ -70,20 +79,15 @@ async fn main() -> bluer::Result<()> {
     adapter.set_powered(true).await?;
     info!("Adapter powered on");
 
-    let current_challenge = Arc::new(RwLock::new(vec![0u8; 32]));
-    let challenge_read = current_challenge.clone();
-    let challenge_verify = current_challenge.clone();
-
+    let current_challenge = CurrentChallenge::default();
     let challenge_trigger = Arc::new(Notify::new());
-    let challenge_trigger_notify = challenge_trigger.clone();
-    let challenge_trigger_socket = challenge_trigger.clone();
-
-    let last_verified_at = Arc::new(AtomicU64::new(0));
-    let last_verified_at_verify = last_verified_at.clone();
-
-    let is_first_notify = Arc::new(AtomicBool::new(true));
-    let is_first_notify_notify = is_first_notify.clone();
-    let is_first_notify_cmd = is_first_notify.clone();
+    let pending_notifications = PendingNotifications::default();
+    let auth_session = AuthSession::new(
+        app_config
+            .auth_cache_ttl_seconds
+            .expect("auth_cache_ttl_seconds must be set in config"),
+    );
+    let notify_ready = Arc::new(AtomicBool::new(false));
 
     let app = Application {
         services: vec![Service {
@@ -91,13 +95,14 @@ async fn main() -> bluer::Result<()> {
             primary: true,
             characteristics: vec![
                 challenge_char::generate_challenge_char(
-                    challenge_read,
-                    challenge_trigger_notify,
-                    is_first_notify_notify,
+                    current_challenge.clone(),
+                    challenge_trigger.clone(),
+                    notify_ready.clone(),
                 ),
                 response_char::generate_response_char(
-                    challenge_verify,
-                    last_verified_at_verify,
+                    current_challenge.clone(),
+                    pending_notifications.clone(),
+                    auth_session.clone(),
                     app_config.public_key_der_hex.clone(),
                 ),
             ],
@@ -120,13 +125,11 @@ async fn main() -> bluer::Result<()> {
     let _adv_handle = adapter.advertise(le_advertisement).await?;
     info!("Advertising started");
 
-    let auth_caches = AuthCaches::default();
-
     let socket_server = Arc::new(SocketServer::new(
-        last_verified_at,
-        challenge_trigger_socket,
-        is_first_notify_cmd,
-        auth_caches,
+        challenge_trigger.clone(),
+        pending_notifications,
+        auth_session,
+        notify_ready.clone(),
     ));
 
     tokio::spawn(async move {

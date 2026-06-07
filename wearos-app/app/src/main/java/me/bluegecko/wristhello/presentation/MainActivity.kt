@@ -13,7 +13,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.RequiresPermission
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,13 +46,8 @@ import androidx.wear.compose.ui.tooling.preview.WearPreviewFontScales
 import me.bluegecko.wristhello.presentation.theme.WristHelloTheme
 
 class MainActivity : ComponentActivity() {
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ContextCompat.startForegroundService(
-            this,
-            Intent(this, ForegroundService::class.java)
-        )
         setContent {
             WearApp()
         }
@@ -61,37 +55,61 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-@RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
 fun WearApp(viewModel: MainViewModel = viewModel()) {
-    val bleState by viewModel.bleState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val bleState by viewModel.bleState.collectAsStateWithLifecycle()
 
     val publicKeyQrCode = remember {
         generateQrCode(viewModel.getPublicKey().joinToString("") { "%02x".format(it) })
     }
 
-    val requestPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (isGranted) viewModel.connect()
+    fun startBleService() {
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, ForegroundService::class.java)
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val bluetoothGranted =
+            permissions[Manifest.permission.BLUETOOTH_CONNECT] == true || ContextCompat.checkSelfPermission(
+                context, Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        val notificationsGranted =
+            permissions[Manifest.permission.POST_NOTIFICATIONS] == true || ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+
+        if (bluetoothGranted && notificationsGranted) {
+            startBleService()
+        }
     }
 
     LaunchedEffect(Unit) {
-        if (ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            viewModel.connect()
-        } else {
-            requestPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        val permissionsToRequest = buildList {
+            if (ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+
+            if (ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
 
-        if (ContextCompat.checkSelfPermission(
-                context, Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (permissionsToRequest.isEmpty()) {
+            startBleService()
+        } else {
+            permissionLauncher.launch(permissionsToRequest.toTypedArray())
         }
     }
 
@@ -132,8 +150,7 @@ fun WearApp(viewModel: MainViewModel = viewModel()) {
 
                                     EdgeButton(
                                         onClick = {
-                                            if (bleState is BleState.Connected) viewModel.disconnect()
-                                            viewModel.connect()
+                                            viewModel.reconnect()
                                         },
                                         enabled = bleState != BleState.Connecting,
                                         buttonSize = EdgeButtonSize.ExtraSmall,
@@ -161,7 +178,6 @@ fun WearApp(viewModel: MainViewModel = viewModel()) {
     }
 }
 
-@RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
 @WearPreviewDevices
 @WearPreviewFontScales
 @Composable

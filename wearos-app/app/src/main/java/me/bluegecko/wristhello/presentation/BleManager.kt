@@ -12,15 +12,23 @@ import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.annotation.RequiresPermission
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 
 private val SERVICE_UUID = UUID.fromString("ddc6ea97-db6e-4ecd-a3ff-0143368ef829")
 private val CHALLENGE_CHAR_UUID = UUID.fromString("5794ca86-3a5e-45ca-85f9-42a74cd460a7")
 private val RESPONSE_CHAR_UUID = UUID.fromString("f68c58c2-a1f2-456f-a118-f1c6ce566a0a")
 
 private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
+private val DENY_RESPONSE = byteArrayOf(0x00)
+private const val APPROVE_TIMEOUT_MILLIS = 30_000L
 
 sealed class BleState {
     object Disconnected : BleState()
@@ -32,7 +40,9 @@ sealed class BleState {
 class BleManager(
     private val context: Context,
     private val keyStoreManager: KeystoreManager,
-    private val onChallengeReceived: (() -> Unit)? = null
+    private val scope: CoroutineScope,
+    private val onChallengeReceived: (() -> Unit)? = null,
+    private var pendingApproval: CompletableDeferred<Boolean>? = null
 ) {
     private var gatt: BluetoothGatt? = null
 
@@ -55,6 +65,10 @@ class BleManager(
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun connectToPairedDevice() {
+        if (_bleState.value is BleState.Connecting || _bleState.value is BleState.Connected) {
+            return
+        }
+
         val target: BluetoothDevice? = findDeviceByServiceUuid(context, SERVICE_UUID)
         if (target == null) {
             _bleState.value = BleState.Error("No paired device found")
@@ -62,12 +76,25 @@ class BleManager(
         }
 
         _bleState.value = BleState.Connecting
-        target.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        gatt = target.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun disconnect() {
-        gatt?.disconnect()
+        val currentGatt = gatt
+        if (currentGatt == null) {
+            _bleState.value = BleState.Disconnected
+            return
+        }
+        currentGatt.disconnect()
+    }
+
+    fun approvePendingChallenge() {
+        pendingApproval?.complete(true)
+    }
+
+    fun denyPendingChallenge() {
+        pendingApproval?.complete(false)
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -121,7 +148,9 @@ class BleManager(
             value: ByteArray
         ) {
             if (characteristic.uuid == CHALLENGE_CHAR_UUID) {
-                handleChallenge(gatt, value)
+                scope.launch {
+                    handleChallenge(gatt, value)
+                }
             }
         }
     }
@@ -135,9 +164,26 @@ class BleManager(
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private fun handleChallenge(gatt: BluetoothGatt, challenge: ByteArray) {
+    private suspend fun handleChallenge(gatt: BluetoothGatt, challenge: ByteArray) {
         _challengeData.value = challenge
+
+        val approval = CompletableDeferred<Boolean>()
+        pendingApproval = approval
+
         onChallengeReceived?.invoke()
+
+        val approved = withTimeoutOrNull(APPROVE_TIMEOUT_MILLIS.milliseconds) {
+            approval.await()
+        } == true
+
+        if (pendingApproval == approval) {
+            pendingApproval = null
+        }
+
+        if (!approved) {
+            writeResponse(gatt, DENY_RESPONSE + challenge)
+            return
+        }
 
         if (!keyStoreManager.hasKey()) {
             keyStoreManager.getOrGenerateRawPublicKey()

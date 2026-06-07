@@ -1,7 +1,3 @@
-#include <asm-generic/errno.h>
-#include <security/_pam_compat.h>
-#include <sys/syslog.h>
-#include <sys/types.h>
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
@@ -15,16 +11,15 @@
 #include <sys/time.h>
 #include <sys/un.h>
 #include <syslog.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "common.h"
 
 #define SOCKET_PATH "/run/wrist-hello/auth.sock"
 #define BUF_SIZE 256
-#define AUTH_CACHE_TTL 60
+#define AUTH_TIMEOUT_SECONDS 30
 
-int get_auth_cache(pam_handle_t* pamh, AuthCache* item) {
+int get_auth_identity(pam_handle_t* pamh, AuthIdentity* identity) {
     const char* user = NULL;
     const char* tty = NULL;
     const char* service = NULL;
@@ -41,123 +36,33 @@ int get_auth_cache(pam_handle_t* pamh, AuthCache* item) {
     if (!pw) {
         return PAM_USER_UNKNOWN;
     }
-    item->uid = pw->pw_uid;
+    identity->uid = pw->pw_uid;
 
     if (tty) {
-        strncpy(item->tty, tty, sizeof(item->tty) - 1);
-        item->tty[sizeof(item->tty) - 1] = '\0';
+        strncpy(identity->tty, tty, sizeof(identity->tty) - 1);
+        identity->tty[sizeof(identity->tty) - 1] = '\0';
     } else {
-        item->tty[0] = '\0';
+        identity->tty[0] = '\0';
     }
 
     if (service) {
-        strncpy(item->service, service, sizeof(item->service) - 1);
-        item->service[sizeof(item->service) - 1] = '\0';
+        strncpy(identity->service, service, sizeof(identity->service) - 1);
+        identity->service[sizeof(identity->service) - 1] = '\0';
     } else {
-        item->service[0] = '\0';
+        identity->service[0] = '\0';
     }
-
-    time_t now = time(NULL);
-    item->expires_at = now + AUTH_CACHE_TTL;
 
     return PAM_SUCCESS;
 }
 
-int add_auth_cache(pam_handle_t* pamh, int fd, const AuthCache* cache) {
-    SocketCommand cmd = CMD_ADD_AUTH_CACHE;
-    ssize_t n = write(fd, &cmd, sizeof(cmd));
-    if (n < 0) {
-        pam_syslog(pamh, LOG_ERR, "Failed to write command to UNIX socket server");
-        return -1;
-    }
-
-    n = write(fd, cache, sizeof(AuthCache));
-    if (n < 0) {
-        pam_syslog(pamh, LOG_ERR, "Failed to write command to UNIX socket server");
-        return -1;
-    }
-
-    return 0;
-}
-
-bool has_valid_cache(pam_handle_t* pamh, int fd, const AuthCache* item) {
-    SocketCommand cmd = CMD_HAS_VALID_CACHE;
-    ssize_t n = write(fd, &cmd, sizeof(cmd));
-    if (n < 0) {
-        pam_syslog(pamh, LOG_ERR, "Failed to write command to UNIX socket server");
-        return -1;
-    }
-
-    n = write(fd, item, sizeof(AuthCache));
-    if (n < 0) {
-        pam_syslog(pamh, LOG_ERR, "Failed to write command to UNIX socket server");
-        return -1;
-    }
-
-    char buf[BUF_SIZE] = {0};
-    n = recv(fd, buf, sizeof(bool), MSG_WAITALL);
-    if (n == 0) {
-        return 1;  // Socket disconnected
-    }
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return 1;
-        }
-        return -1;
-    }
-
-    return buf[0] == '1';
-}
-
-// Result: 0=Success, 1=Should retry, -1=Fatal error
-int check_status(pam_handle_t* pamh, int fd) {
-    SocketCommand cmd = CMD_CHECK_STATUS;
-    ssize_t n = write(fd, &cmd, sizeof(cmd));
-    if (n < 0) {
-        pam_syslog(pamh, LOG_ERR, "Failed to write command to UNIX socket server");
-        return -1;
-    }
-
-    char buf[BUF_SIZE] = {0};
-    n = recv(fd, buf, sizeof(SocketPayload), MSG_WAITALL);
-    if (n == 0) {
-        return 1;  // Socket disconnected
-    }
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return 1;
-        }
-        return -1;
-    }
-
-    uint8_t* payload = (uint8_t*)buf;
-    SocketPayload sp = {0};
-    if (!socket_payload_deserialize(payload, (size_t)n, &sp) || sp.status != STATUS_VERIFIED) {
-        return 1;
-    }
-
-    return 0;
-}
-
-int check_status_with_ttl(pam_handle_t* pamh, int fd, int ttl) {
-    while (ttl-- > 0) {
-        sleep(1);
-        int status = check_status(pamh, fd);
-        if (status == 0) return 0;    // If success
-        if (status == -1) return -1;  // If fatal errors occurred
-    }
-
-    return -1;
-}
-
-int auth_via_socket(pam_handle_t* pamh, char* socket_path) {
+int open_socket(const char* socket_path) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
 
     struct timeval tv;
-    tv.tv_sec = 1;
+    tv.tv_sec = AUTH_TIMEOUT_SECONDS;
     tv.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     struct sockaddr_un addr = {
         .sun_family = AF_UNIX,
@@ -169,24 +74,56 @@ int auth_via_socket(pam_handle_t* pamh, char* socket_path) {
         return -1;
     }
 
-    int result = check_status(pamh, fd);
-    if (result == 0) {
-        close(fd);
-        return 0;
+    return fd;
+}
+
+int handle_authentication(pam_handle_t* pamh) {
+    AuthIdentity identity = {0};
+    int identity_result = get_auth_identity(pamh, &identity);
+    if (identity_result != PAM_SUCCESS) return identity_result;
+
+    int fd = open_socket(SOCKET_PATH);
+    if (fd < 0) {
+        pam_syslog(pamh, LOG_ERR, "Failed to connect to UNIX socket server");
+        return PAM_AUTH_ERR;
     }
 
-    SocketCommand cmd = CMD_TRIGGER_CHALLENGE;
-    ssize_t n = write(fd, &cmd, sizeof(cmd));
-    if (n < 0) {
-        pam_syslog(pamh, LOG_ERR, "Failed to write command to UNIX socket server");
-        close(fd);
-        return -1;
+    // Use a `while` loop with a `remaining` counter so the send operation can recover even if a
+    // short write occurs
+    const uint8_t* p = (const uint8_t*)&identity;
+    size_t remaining = sizeof(identity);
+    while (remaining > 0) {
+        ssize_t n = write(fd, p, remaining);
+
+        if (n < 0) {
+            if (errno == EINTR) continue;
+
+            pam_syslog(pamh, LOG_ERR, "Failed to write auth identity to UNIX socket server: %s",
+                       strerror(errno));
+            close(fd);
+            return PAM_AUTH_ERR;
+        }
+
+        if (n == 0) {
+            pam_syslog(pamh, LOG_ERR, "UNIX socket server closed connection unexpectedly");
+            close(fd);
+            return PAM_AUTH_ERR;
+        }
+
+        p += n;
+        remaining -= (size_t)n;
     }
 
-    result = check_status_with_ttl(pamh, fd, 5);
+    uint8_t response = 0;
+    ssize_t n = recv(fd, &response, sizeof(response), MSG_WAITALL);
+    if (n != (ssize_t)sizeof(response)) {
+        close(fd);
+        pam_syslog(pamh, LOG_ERR, "Failed to receive response from UNIX socket server");
+        return PAM_AUTH_ERR;
+    }
+
     close(fd);
-
-    return (result == 0) ? 0 : -1;
+    return response == 0 ? PAM_SUCCESS : PAM_AUTH_ERR;
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, const char** argv) {
@@ -195,13 +132,14 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
     (void)argv;
 
     const char* user = NULL;
-    if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || user == NULL) {
+    if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || !user) {
         return PAM_USER_UNKNOWN;
     }
 
-    if (auth_via_socket(pamh, SOCKET_PATH) != 0) {
-        pam_syslog(pamh, LOG_WARNING, "Authentication failed: user=%s", user);
-        return PAM_AUTH_ERR;
+    int result = handle_authentication(pamh);
+    if (result != PAM_SUCCESS) {
+        pam_syslog(pamh, LOG_ERR, "Authentication failed: user=%s, error_code=%d", user, result);
+        return result;
     }
 
     pam_syslog(pamh, LOG_INFO, "Authentication succeeded: user=%s", user);
