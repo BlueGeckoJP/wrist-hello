@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <pwd.h>
 #include <security/_pam_types.h>
 #include <security/pam_ext.h>
@@ -86,23 +87,42 @@ int handle_authentication(pam_handle_t* pamh) {
         return PAM_AUTH_ERR;
     }
 
-    ssize_t n = write(fd, &identity, sizeof(identity));
-    if (n < 0) {
-        pam_syslog(pamh, LOG_ERR, "Failed to write auth identity to UNIX socket server");
-        close(fd);
-        return PAM_AUTH_ERR;
+    // Use a `while` loop with a `remaining` counter so the send operation can recover even if a
+    // short write occurs
+    const uint8_t* p = (const uint8_t*)&identity;
+    size_t remaining = sizeof(identity);
+    while (remaining > 0) {
+        ssize_t n = write(fd, p, remaining);
+
+        if (n < 0) {
+            if (errno == EINTR) continue;
+
+            pam_syslog(pamh, LOG_ERR, "Failed to write auth identity to UNIX socket server: %s",
+                       strerror(errno));
+            close(fd);
+            return PAM_AUTH_ERR;
+        }
+
+        if (n == 0) {
+            pam_syslog(pamh, LOG_ERR, "UNIX socket server closed connection unexpectedly");
+            close(fd);
+            return PAM_AUTH_ERR;
+        }
+
+        p += n;
+        remaining -= (size_t)n;
     }
 
-    char buf[64] = {0};
-    n = recv(fd, buf, sizeof(bool), MSG_WAITALL);
-    if (n <= 0) {
+    uint8_t response = 0;
+    ssize_t n = recv(fd, &response, sizeof(response), MSG_WAITALL);
+    if (n != (ssize_t)sizeof(response)) {
         close(fd);
         pam_syslog(pamh, LOG_ERR, "Failed to receive response from UNIX socket server");
         return PAM_AUTH_ERR;
     }
 
     close(fd);
-    return buf[0] == 0 ? PAM_SUCCESS : PAM_AUTH_ERR;
+    return response == 0 ? PAM_SUCCESS : PAM_AUTH_ERR;
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, const char** argv) {
