@@ -13,6 +13,8 @@ use crate::{
     pending_notifications::PendingNotifications,
 };
 
+const DENY_RESPONSE: [u8; 1] = [0x00];
+
 /// Generates the GATT characteristic for the authentication challenge response
 pub fn generate_response_char(
     current_challenge: CurrentChallenge,
@@ -42,7 +44,11 @@ pub fn generate_response_char(
     }
 }
 
-/// Handles write requests for the response characteristic by verifying the signature sent by the wearos-app client
+/// Handles writes to the response characteristic
+///
+/// A single `0x00` byte is treated as an explicit deny response from the
+/// wearos-app client. Otherwise, the value is treated as a DER-encoded ECDSA
+/// signature and verified against the current challenge
 async fn handle_response_write(
     new_value: Vec<u8>,
     current_challenge: CurrentChallenge,
@@ -50,8 +56,7 @@ async fn handle_response_write(
     pending_notifications: PendingNotifications,
     auth_session: AuthSession,
 ) -> Result<(), ReqError> {
-    // `0x00` is a deny response
-    if new_value == [0x00] {
+    if new_value == DENY_RESPONSE {
         info!("Received deny response");
 
         // Consume the current challenge

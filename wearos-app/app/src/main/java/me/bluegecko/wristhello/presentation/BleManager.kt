@@ -27,6 +27,7 @@ private val RESPONSE_CHAR_UUID = UUID.fromString("f68c58c2-a1f2-456f-a118-f1c6ce
 
 private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
+private val DENY_RESPONSE = byteArrayOf(0x00)
 private const val APPROVE_TIMEOUT_MILLIS = 30_000L
 
 sealed class BleState {
@@ -180,7 +181,7 @@ class BleManager(
         }
 
         if (!approved) {
-            writeResponse(gatt, byteArrayOf(0x00)) // Deny response
+            writeResponse(gatt, DENY_RESPONSE)
             return
         }
 

@@ -4,6 +4,7 @@ use tokio::sync::oneshot;
 
 /// Represents the result of an authentication attempt
 /// This enum does not include `Failure`; failures are represented simply as errors
+/// `Denied` represents an explicit user denial or approval timeout
 #[derive(Clone, Copy)]
 pub enum AuthResult {
     Success,
