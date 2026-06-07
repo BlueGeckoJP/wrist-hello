@@ -50,6 +50,24 @@ async fn handle_response_write(
     pending_notifications: PendingNotifications,
     auth_session: AuthSession,
 ) -> Result<(), ReqError> {
+    // `0x00` is a deny response
+    if new_value == [0x00] {
+        info!("Received deny response");
+
+        // Consume the current challenge
+        let _ = current_challenge.take();
+
+        pending_notifications.fail_all().map_err(|e| {
+            error!(
+                "Error: Failed to notify pending notifications of failed authentication: {}",
+                e
+            );
+            ReqError::Failed
+        })?;
+
+        return Ok(());
+    }
+
     let challenge = match current_challenge.take() {
         Ok(ch) => ch,
         Err(e) => {
@@ -81,7 +99,7 @@ async fn handle_response_write(
             match auth_session.mark_verified() {
                 Ok(_) => info!("Marked session as verified"),
                 Err(e) => {
-                    error!("Error: Failed to notify: {}", e);
+                    error!("Error: Failed to mark session as verified: {}", e);
                     return Err(ReqError::Failed);
                 }
             }
@@ -89,7 +107,7 @@ async fn handle_response_write(
             match pending_notifications.notify_all() {
                 Ok(count) => info!("Notified {} pending notifications", count),
                 Err(e) => {
-                    error!("Error: Failed to notify: {}", e);
+                    error!("Error: Failed to notify pending notifications: {}", e);
                     return Err(ReqError::Failed);
                 }
             }

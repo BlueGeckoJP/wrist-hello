@@ -180,6 +180,7 @@ class BleManager(
         }
 
         if (!approved) {
+            writeResponse(gatt, byteArrayOf(0x00)) // Deny response
             return
         }
 

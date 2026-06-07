@@ -11,12 +11,12 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
-    sync::Notify,
+    sync::{Notify, oneshot},
     time::timeout,
 };
 use tracing::{error, info, warn};
 
-use crate::{auth_session::AuthSession, bindings, pending_notifications::PendingNotifications};
+use crate::{auth_session::AuthSession, bindings, pending_notifications::{AuthResult, PendingNotifications}};
 
 const SOCKET_PATH: &str = "/run/wrist-hello/auth.sock";
 const AUTH_TIMEOUT_SECONDS: u64 = 30;
@@ -108,15 +108,18 @@ impl SocketServer {
             return;
         }
 
-        let notify = Arc::new(Notify::new());
-        if let Err(e) = self.pending_notifications.add_one(notify.clone()) {
-            error!("Failed to add notify to pending notifications: {}", e);
-            return;
-        }
+        let (notify_tx, notify_rx) = oneshot::channel();
+        let notify_id = match self.pending_notifications.add_one(notify_tx) {
+            Ok(id) => id,
+            Err(e) => {
+                error!("Failed to add notify to pending notifications: {}", e);
+                return;
+            }
+        };
 
         if !self.notify_ready.load(Ordering::SeqCst) {
             error!("Notify not ready, cannot trigger challenge");
-            if let Err(e) = self.pending_notifications.remove_one(notify) {
+            if let Err(e) = self.pending_notifications.remove_one(&notify_id) {
                 error!("Failed to remove notify from pending notifications: {}", e);
             }
 
@@ -131,11 +134,30 @@ impl SocketServer {
         info!("Triggering challenge");
         self.challenge_trigger.notify_one();
 
-        match timeout(Duration::from_secs(AUTH_TIMEOUT_SECONDS), notify.notified()).await {
-            Ok(_) => info!("Received verification notification"),
+        match timeout(Duration::from_secs(AUTH_TIMEOUT_SECONDS), notify_rx).await {
+            Ok(result) => match result {
+                Ok(AuthResult::Success) => info!("Received successful verification notification"),
+                Ok(AuthResult::Denied) => {
+                    warn!("Received denied verification notification");
+                    if let Err(e) = Self::reply_to_stream(stream, &[1u8]).await {
+                        error!("Failed to send denied response to client: {}", e);
+                    }
+                    if let Err(e) = self.pending_notifications.remove_one(&notify_id) {
+                        error!("Failed to remove notify from pending notifications: {}", e);
+                    }
+                    return;
+                }
+                Err(e) => {
+                    error!("Failed to receive verification notification: {}", e);
+                    if let Err(e) = self.pending_notifications.remove_one(&notify_id) {
+                        error!("Failed to remove notify from pending notifications: {}", e);
+                    }
+                    return;
+                }
+            },
             Err(e) => {
                 error!("Failed to wait for verification notification: {}", e);
-                if let Err(e) = self.pending_notifications.remove_one(notify) {
+                if let Err(e) = self.pending_notifications.remove_one(&notify_id) {
                     error!("Failed to remove notify from pending notifications: {}", e);
                 }
                 return;
@@ -153,7 +175,7 @@ impl SocketServer {
             Self::c_bytes_to_string(&auth_identity.service)
         );
 
-        if let Err(e) = self.pending_notifications.remove_one(notify) {
+        if let Err(e) = self.pending_notifications.remove_one(&notify_id) {
             error!("Failed to remove notify from pending notifications: {}", e);
         }
     }
