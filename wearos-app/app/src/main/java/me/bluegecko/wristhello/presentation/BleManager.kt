@@ -181,7 +181,7 @@ class BleManager(
         }
 
         if (!approved) {
-            writeResponse(gatt, DENY_RESPONSE)
+            writeResponse(gatt, DENY_RESPONSE + challenge)
             return
         }
 

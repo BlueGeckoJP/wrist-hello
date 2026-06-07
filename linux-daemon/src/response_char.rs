@@ -13,7 +13,7 @@ use crate::{
     pending_notifications::PendingNotifications,
 };
 
-const DENY_RESPONSE: [u8; 1] = [0x00];
+const DENY_RESPONSE_MARKER: u8 = 0x00;
 
 /// Generates the GATT characteristic for the authentication challenge response
 pub fn generate_response_char(
@@ -46,7 +46,8 @@ pub fn generate_response_char(
 
 /// Handles writes to the response characteristic
 ///
-/// A single `0x00` byte is treated as an explicit deny response from the
+/// A value starting with `0x00` followed by the current 32-byte
+/// challenge is treated as an explicit deny response from the
 /// wearos-app client. Otherwise, the value is treated as a DER-encoded ECDSA
 /// signature and verified against the current challenge
 async fn handle_response_write(
@@ -56,20 +57,33 @@ async fn handle_response_write(
     pending_notifications: PendingNotifications,
     auth_session: AuthSession,
 ) -> Result<(), ReqError> {
-    if new_value == DENY_RESPONSE {
-        info!("Received deny response");
+    if new_value.first() == Some(&DENY_RESPONSE_MARKER) {
+        if new_value.len() != 1 + 32 {
+            error!("Error: Invalid deny response length");
+            return Err(ReqError::Failed);
+        }
 
-        // Consume the current challenge
-        let _ = current_challenge.take();
+        match current_challenge.take_if_matches(&new_value[1..]) {
+            Ok(true) => {}
+            Ok(false) => {
+                error!("Error: Deny response challenge does not match current challenge");
+                return Err(ReqError::Failed);
+            }
+            Err(e) => {
+                error!(
+                    "Error: Failed to get current challenge for deny response: {}",
+                    e
+                );
+                return Err(ReqError::Failed);
+            }
+        }
 
         pending_notifications.fail_all().map_err(|e| {
-            error!(
-                "Error: Failed to notify pending notifications of failed authentication: {}",
-                e
-            );
+            error!("Error: Failed to fail pending notifications: {}", e);
             ReqError::Failed
         })?;
 
+        info!("Authentication denied by client");
         return Ok(());
     }
 

@@ -37,7 +37,7 @@ linux-daemonでは認証成功後、短時間だけ認証済みの状態を保�
 
 wearos-app側でユーザーからサインインの承認がおりた場合は署名済みのチャレンジレスポンスが送信される
 
-もしサインインの承認がおりなかった場合・wearos-app側のユーザーへの承認がタイムアウトした場合は`0x00`が送信される
+もしサインインの承認がおりなかった場合・wearos-app側のユーザーへの承認がタイムアウトした場合は`0x00`に現在のchallengeを続けたdeny responseが送信される(`0x00` + challenge)
 
 ## 各コンポーネントの役割
 
@@ -54,7 +54,7 @@ wearos-app側でユーザーからサインインの承認がおりた場合は�
 - PC側の認証プロセスはここで行われる
 - challenge/response characteristicsを提供する
 - pam-moduleから認証開始を受け取ったら新しいchallenge characteristicを設定しwearos-appに通知する
-- wearos-appから受け取ったデータが成功(署名済みデータ)か失敗(`0x00`)かを判断する
+- wearos-appから受け取ったデータが成功(署名済みデータ)か失敗(`0x00` + challenge のdeny response)かを判断する
 - wearos-appから受け取った署名を公開鍵で署名を検証する
 - 認証成功後pam-moduleに結果を送信
 - 認証成功後一定期間は通常の認証プロセスをバイパスし、即認証済みとしてpam-moduleに送信する (キャッシュ機能 キャッシュの秒数は変更可)
@@ -63,6 +63,6 @@ wearos-app側でユーザーからサインインの承認がおりた場合は�
 
 - BLE経由でchallenge characteristicを受け取る
 - 通知を通してユーザーにサインインの承諾を得る
-- サインインの承諾が得られない場合、即時`0x00`をlinux-daemonに返す
+- サインインの承諾が得られない場合、即時`0x00` + challenge のdeny responseをlinux-daemonに返す
 - サインインの承諾が得られた場合、Android Keystoreに保持してある秘密鍵でchallengeに署名する
 - サインインの承諾が得られた場合、署名をresponse characteristicに書き込む
