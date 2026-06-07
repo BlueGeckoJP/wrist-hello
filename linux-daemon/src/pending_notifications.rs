@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
 /// Represents the result of an authentication attempt
-/// This structure does not include `Failure`; failures are represented simply as errors
+/// This enum does not include `Failure`; failures are represented simply as errors
 #[derive(Clone, Copy)]
 pub enum AuthResult {
     Success,
@@ -15,7 +15,7 @@ struct PendingNotification {
     sender: oneshot::Sender<AuthResult>,
 }
 
-/// Represents pending notifications used to notify the UNIX socket worker when the wearos-app client challenge response is successfully verified
+/// Represents pending notifications used to notify the UNIX socket workers waiting for an authentication result
 #[derive(Clone, Default)]
 pub struct PendingNotifications {
     inner: Arc<Mutex<Vec<PendingNotification>>>,
@@ -38,7 +38,7 @@ impl PendingNotifications {
         Ok(num_notifications)
     }
 
-    /// Adds a new pending notification to the list
+    /// Adds a new pending notification to the list and returns its UUID
     pub fn add_one(&self, sender: oneshot::Sender<AuthResult>) -> eyre::Result<String> {
         let id = uuid::Uuid::new_v4().to_string();
 
@@ -55,15 +55,17 @@ impl PendingNotifications {
         Ok(id)
     }
 
-    /// Notifies all pending notifications and consumes them
+    /// Sends a successful authentication result and consumes all pending notifications
     pub fn notify_all(&self) -> eyre::Result<usize> {
         Ok(self.send_all(AuthResult::Success)?)
     }
 
+    /// Sends a failed/denied authentication result and consumes all pending notifications
     pub fn fail_all(&self) -> eyre::Result<usize> {
         Ok(self.send_all(AuthResult::Denied)?)
     }
 
+    /// Removes a pending notification by its UUID
     pub fn remove_one(&self, uuid: &str) -> eyre::Result<()> {
         let mut inner = match self.inner.lock() {
             Ok(inner) => inner,
