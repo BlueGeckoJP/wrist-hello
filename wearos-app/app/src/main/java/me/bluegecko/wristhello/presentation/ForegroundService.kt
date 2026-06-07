@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -49,6 +50,7 @@ class ForegroundService : Service() {
         bleManager = BleManager(
             context = applicationContext,
             keyStoreManager = KeystoreManager(),
+            scope = scope,
             onChallengeReceived = { showChallengeNotification() }
         )
 
@@ -93,8 +95,19 @@ class ForegroundService : Service() {
                 requestReconnect()
             }
 
+            ACTION_APPROVE_CHALLENGE -> {
+                bleManager.approvePendingChallenge()
+                cancelChallengeNotification()
+            }
+
+            ACTION_DENY_CHALLENGE -> {
+                bleManager.denyPendingChallenge()
+                cancelChallengeNotification()
+            }
+
             else -> connectIfPossible()
         }
+
         return START_STICKY
     }
 
@@ -166,19 +179,60 @@ class ForegroundService : Service() {
 
     private fun showChallengeNotification() {
         val manager = getSystemService(NotificationManager::class.java)
+
+        val approveIntent =
+            Intent(this, ForegroundService::class.java).setAction(ACTION_APPROVE_CHALLENGE)
+        val approvePendingIntent = PendingIntent.getForegroundService(
+            this,
+            REQUEST_APPROVE_CHALLENGE,
+            approveIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val denyIntent =
+            Intent(this, ForegroundService::class.java).setAction(ACTION_DENY_CHALLENGE)
+        val denyPendingIntent = PendingIntent.getForegroundService(
+            this,
+            REQUEST_DENY_CHALLENGE,
+            denyIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification =
-            Notification.Builder(this, CHALLENGE_CHANNEL_ID).setContentTitle("Wrist Hello")
-                .setContentText("Signing a challenge").setStyle(
+            Notification.Builder(this, CHALLENGE_CHANNEL_ID)
+                .setContentTitle("Wrist Hello")
+                .setContentText("Approve sign-in?")
+                .setStyle(
                     Notification.BigTextStyle().bigText(
                         """
-                           Signing and replying a challenge...
-                           Please check the authentication screen on your PC
+                            A sign-in challenge was received.
+                            Approve to sign and reply.
                         """.trimIndent()
                     )
                 ).setSmallIcon(R.mipmap.ic_launcher)
-                .setAutoCancel(true).build()
+                .setAutoCancel(true)
+                .addAction(
+                    Notification.Action.Builder(
+                        R.mipmap.ic_launcher,
+                        "Approve",
+                        approvePendingIntent
+                    ).build()
+                )
+                .addAction(
+                    Notification.Action.Builder(
+                        R.mipmap.ic_launcher,
+                        "Deny",
+                        denyPendingIntent
+                    ).build()
+                )
+                .build()
 
         manager.notify(CHALLENGE_NOTIFICATION_ID, notification)
+    }
+
+    private fun cancelChallengeNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.cancel(CHALLENGE_NOTIFICATION_ID)
     }
 
     companion object {
@@ -186,6 +240,10 @@ class ForegroundService : Service() {
         private const val CHALLENGE_CHANNEL_ID = "challenge_alerts"
         private const val NOTIFICATION_ID = 1001
         private const val CHALLENGE_NOTIFICATION_ID = 1002
+        private const val REQUEST_APPROVE_CHALLENGE = 2001
+        private const val REQUEST_DENY_CHALLENGE = 2002
         const val ACTION_RECONNECT = "me.bluegecko.wristhello.action.RECONNECT"
+        const val ACTION_APPROVE_CHALLENGE = "me.bluegecko.wristhello.action.APPROVE_CHALLENGE"
+        const val ACTION_DENY_CHALLENGE = "me.bluegecko.wristhello.action.DENY_CHALLENGE"
     }
 }

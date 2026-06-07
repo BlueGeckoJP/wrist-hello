@@ -19,6 +19,7 @@ use tracing::{error, info, warn};
 use crate::{auth_session::AuthSession, bindings, pending_notifications::PendingNotifications};
 
 const SOCKET_PATH: &str = "/run/wrist-hello/auth.sock";
+const AUTH_TIMEOUT_SECONDS: u64 = 30;
 
 pub struct SocketServer {
     challenge_trigger: Arc<Notify>,
@@ -130,7 +131,7 @@ impl SocketServer {
         info!("Triggering challenge");
         self.challenge_trigger.notify_one();
 
-        match timeout(Duration::from_secs(5), notify.notified()).await {
+        match timeout(Duration::from_secs(AUTH_TIMEOUT_SECONDS), notify.notified()).await {
             Ok(_) => info!("Received verification notification"),
             Err(e) => {
                 error!("Failed to wait for verification notification: {}", e);

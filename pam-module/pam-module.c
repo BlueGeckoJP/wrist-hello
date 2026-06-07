@@ -17,6 +17,7 @@
 
 #define SOCKET_PATH "/run/wrist-hello/auth.sock"
 #define BUF_SIZE 256
+#define AUTH_TIMEOUT_SECONDS 30
 
 int get_auth_identity(pam_handle_t* pamh, AuthIdentity* identity) {
     const char* user = NULL;
@@ -59,7 +60,7 @@ int open_socket(const char* socket_path) {
     if (fd < 0) return -1;
 
     struct timeval tv;
-    tv.tv_sec = 5;
+    tv.tv_sec = AUTH_TIMEOUT_SECONDS;
     tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
