@@ -68,7 +68,10 @@ async fn main() -> bluer::Result<()> {
         Ok(config) => Arc::new(config),
         Err(e) => {
             error!("Error loading config: {}", e);
-            return Ok(());
+            return Err(bluer::Error {
+                kind: bluer::ErrorKind::Failed,
+                message: format!("Failed to load config: {}", e),
+            });
         }
     };
 
