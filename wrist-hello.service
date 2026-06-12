@@ -1,0 +1,28 @@
+[Unit]
+Description=Wrist Hello Daemon
+After=bluetooth.service dbus.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+RuntimeDirectory=wrist-hello
+RuntimeDirectoryMode=0700
+
+UMask=0077
+
+Environment=XDG_CONFIG_HOME=/etc/wrist-hello
+
+ExecStart=/usr/local/sbin/wrist-hello/daemon
+Restart=on-failure
+RestartSec=2s
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

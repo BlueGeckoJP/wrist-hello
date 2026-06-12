@@ -51,12 +51,15 @@ pub async fn advertise_service(adapter: &bluer::Adapter) -> eyre::Result<Adverti
         ..Default::default()
     };
 
-    if let Ok(handle) = adapter.advertise(le_advertisement).await {
-        info!("Advertising started with bluer");
-        return Ok(AdvertisementHandle::Bluer(handle));
+    match adapter.advertise(le_advertisement.clone()).await {
+        Ok(handle) => {
+            info!("Advertising started with bluer");
+            return Ok(AdvertisementHandle::Bluer(handle));
+        }
+        Err(e) => {
+            error!("Failed to advertise with bluer: {e}, falling back to btmgmt",);
+        }
     }
-
-    error!("Failed to advertise with bluer, falling back to btmgmt");
 
     match register_btmgmt_advertisement(adapter.name()) {
         Ok(handle) => {
@@ -100,10 +103,18 @@ fn register_btmgmt_advertisement(adapter_name: &str) -> eyre::Result<BtmgmtAdver
 }
 
 fn run_bluetooth_mgmt(args: &[&str]) -> eyre::Result<()> {
+    let btmgmt_cmd = shell_words::join(std::iter::once("btmgmt").chain(args.iter().copied()));
+
+    // Simply inheriting stdio does not necessarily create a TTY, so `btmgmt` may hang in some environments
+    // To avoid this, we need to run it through the `script` command, which creates a pseudo-TTY
     let status = Command::new("timeout")
-        .arg("5")
-        .arg("btmgmt")
-        .args(args)
+        .arg("10")
+        .arg("script")
+        .arg("-q")
+        .arg("-e")
+        .arg("-c")
+        .arg(btmgmt_cmd)
+        .arg("/dev/null")
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
