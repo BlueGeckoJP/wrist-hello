@@ -1,6 +1,7 @@
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
+mod advertisement_handle;
 mod auth_session;
 mod challenge_char;
 mod current_challenge;
@@ -21,8 +22,9 @@ use tracing::{error, info};
 use xdg::BaseDirectories;
 
 use crate::{
-    auth_session::AuthSession, current_challenge::CurrentChallenge,
-    pending_notifications::PendingNotifications, socket_server::SocketServer,
+    advertisement_handle::advertise_service, auth_session::AuthSession,
+    current_challenge::CurrentChallenge, pending_notifications::PendingNotifications,
+    socket_server::SocketServer,
 };
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
@@ -61,17 +63,14 @@ impl AppConfig {
 }
 
 #[tokio::main]
-async fn main() -> bluer::Result<()> {
+async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
 
     let app_config = match AppConfig::load() {
         Ok(config) => Arc::new(config),
         Err(e) => {
             error!("Error loading config: {}", e);
-            return Err(bluer::Error {
-                kind: bluer::ErrorKind::Failed,
-                message: format!("Failed to load config: {}", e),
-            });
+            eyre::bail!("Failed to load config: {}", e);
         }
     };
 
@@ -115,17 +114,10 @@ async fn main() -> bluer::Result<()> {
         ..Default::default()
     };
 
-    let _app_handle = adapter.serve_gatt_application(app).await?;
+    let app_handle = adapter.serve_gatt_application(app).await?;
     info!("GATT application registered");
 
-    let le_advertisement = bluer::adv::Advertisement {
-        advertisement_type: bluer::adv::Type::Peripheral,
-        service_uuids: vec![SERVICE_UUID].into_iter().collect(),
-        discoverable: Some(true),
-        local_name: Some("wrist-hello-server".to_string()),
-        ..Default::default()
-    };
-    let _adv_handle = adapter.advertise(le_advertisement).await?;
+    let advertisement_handle = advertise_service(&adapter).await?;
     info!("Advertising started");
 
     let socket_server = Arc::new(SocketServer::new(
@@ -146,5 +138,9 @@ async fn main() -> bluer::Result<()> {
     tokio::signal::ctrl_c().await?;
 
     info!("Stopping");
+
+    drop(app_handle);
+    advertisement_handle.unregister();
+
     Ok(())
 }
