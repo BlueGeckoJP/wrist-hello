@@ -147,6 +147,8 @@ fn run_bluetooth_mgmt(args: &[&str]) -> eyre::Result<()> {
 
     // Simply inheriting stdio does not necessarily create a TTY, so `btmgmt` may hang in some environments
     // To avoid this, we need to run it through the `script` command, which creates a pseudo-TTY
+
+    // Without using `Stdio:nulL()`, the process may wait for the full timeout duration even after the command has finished
     let status = Command::new("timeout")
         .arg(BTMGMT_TIMEOUT_SECONDS)
         .arg("script")
@@ -155,9 +157,9 @@ fn run_bluetooth_mgmt(args: &[&str]) -> eyre::Result<()> {
         .arg("-c")
         .arg(btmgmt_cmd)
         .arg("/dev/null")
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()?;
 
     if status.success() {
