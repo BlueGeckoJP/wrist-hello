@@ -87,6 +87,9 @@ fn register_btmgmt_advertisement(adapter_name: &str) -> eyre::Result<BtmgmtAdver
 
     let _ = run_bluetooth_mgmt(&["-i", adapter_name, "rm-adv", &instance_id.to_string()]);
 
+    // Bluetooth must be both enabled and visible; otherwise it will not show up
+    // on the Pixel Watch and cannot be connected. In KDE, turn on:
+    // Configure Bluetooth... -> Configure... -> Visible
     let add_adv_result = run_bluetooth_mgmt(&[
         "-i",
         adapter_name,
