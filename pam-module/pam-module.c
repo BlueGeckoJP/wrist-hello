@@ -19,13 +19,23 @@
 #define BUF_SIZE 256
 #define AUTH_TIMEOUT_SECONDS 30
 
+typedef enum {
+    WRIST_AUTH_SUCCESS,
+    WRIST_AUTH_FAILURE,
+    WRIST_OPEN_SOCKET_ERROR,
+    WRIST_WRITE_SOCKET_ERROR,
+    WRIST_SOCKET_CLOSED_ERROR,
+    WRIST_READ_SOCKET_ERROR,
+} WristResultCode;
+
+// success=0, failure=1
 int get_auth_identity(pam_handle_t* pamh, AuthIdentity* identity) {
     const char* user = NULL;
     const char* tty = NULL;
     const char* service = NULL;
 
     if (pam_get_item(pamh, PAM_USER, (const void**)&user) != PAM_SUCCESS || !user) {
-        return PAM_AUTH_ERR;
+        return 1;
     }
 
     pam_get_item(pamh, PAM_TTY, (const void**)&tty);
@@ -34,7 +44,7 @@ int get_auth_identity(pam_handle_t* pamh, AuthIdentity* identity) {
 
     struct passwd* pw = getpwnam(user);
     if (!pw) {
-        return PAM_USER_UNKNOWN;
+        return 1;
     }
     identity->uid = pw->pw_uid;
 
@@ -52,7 +62,7 @@ int get_auth_identity(pam_handle_t* pamh, AuthIdentity* identity) {
         identity->service[0] = '\0';
     }
 
-    return PAM_SUCCESS;
+    return 0;
 }
 
 int open_socket(const char* socket_path) {
@@ -77,37 +87,27 @@ int open_socket(const char* socket_path) {
     return fd;
 }
 
-int handle_authentication(pam_handle_t* pamh) {
-    AuthIdentity identity = {0};
-    int identity_result = get_auth_identity(pamh, &identity);
-    if (identity_result != PAM_SUCCESS) return identity_result;
-
+WristResultCode handle_authentication(AuthIdentity* identity) {
     int fd = open_socket(SOCKET_PATH);
-    if (fd < 0) {
-        pam_syslog(pamh, LOG_ERR, "Failed to connect to UNIX socket server");
-        return PAM_AUTH_ERR;
-    }
+    if (fd < 0) return WRIST_OPEN_SOCKET_ERROR;
 
     // Use a `while` loop with a `remaining` counter so the send operation can recover even if a
     // short write occurs
     const uint8_t* p = (const uint8_t*)&identity;
-    size_t remaining = sizeof(identity);
+    size_t remaining = sizeof(AuthIdentity);
     while (remaining > 0) {
         ssize_t n = write(fd, p, remaining);
 
         if (n < 0) {
             if (errno == EINTR) continue;
 
-            pam_syslog(pamh, LOG_ERR, "Failed to write auth identity to UNIX socket server: %s",
-                       strerror(errno));
             close(fd);
-            return PAM_AUTH_ERR;
+            return WRIST_WRITE_SOCKET_ERROR;
         }
 
         if (n == 0) {
-            pam_syslog(pamh, LOG_ERR, "UNIX socket server closed connection unexpectedly");
             close(fd);
-            return PAM_AUTH_ERR;
+            return WRIST_SOCKET_CLOSED_ERROR;
         }
 
         p += n;
@@ -118,12 +118,34 @@ int handle_authentication(pam_handle_t* pamh) {
     ssize_t n = recv(fd, &response, sizeof(response), MSG_WAITALL);
     if (n != (ssize_t)sizeof(response)) {
         close(fd);
-        pam_syslog(pamh, LOG_ERR, "Failed to receive response from UNIX socket server");
-        return PAM_AUTH_ERR;
+        return WRIST_READ_SOCKET_ERROR;
     }
 
     close(fd);
-    return response == 0 ? PAM_SUCCESS : PAM_AUTH_ERR;
+    return response == 0 ? WRIST_AUTH_SUCCESS : WRIST_AUTH_FAILURE;
+}
+
+void print_wrist_result(pam_handle_t* pamh, const char* user, WristResultCode code) {
+    switch (code) {
+        case WRIST_AUTH_SUCCESS:
+            pam_syslog(pamh, LOG_INFO, "Authentication succeeded: user=%s", user);
+            break;
+        case WRIST_AUTH_FAILURE:
+            pam_syslog(pamh, LOG_ERR, "Authentication failed: user=%s", user);
+            break;
+        case WRIST_OPEN_SOCKET_ERROR:
+            pam_syslog(pamh, LOG_ERR, "Failed to open socket: user=%s", user);
+            break;
+        case WRIST_WRITE_SOCKET_ERROR:
+            pam_syslog(pamh, LOG_ERR, "Failed to write to socket: user=%s", user);
+            break;
+        case WRIST_SOCKET_CLOSED_ERROR:
+            pam_syslog(pamh, LOG_ERR, "Socket closed unexpectedly: user=%s", user);
+            break;
+        case WRIST_READ_SOCKET_ERROR:
+            pam_syslog(pamh, LOG_ERR, "Failed to read from socket: user=%s", user);
+            break;
+    }
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, const char** argv) {
@@ -136,13 +158,16 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
         return PAM_USER_UNKNOWN;
     }
 
-    int result = handle_authentication(pamh);
-    if (result != PAM_SUCCESS) {
-        pam_syslog(pamh, LOG_ERR, "Authentication failed: user=%s, error_code=%d", user, result);
-        return result;
+    AuthIdentity identity = {0};
+    if (get_auth_identity(pamh, &identity) != 0) {
+        pam_syslog(pamh, LOG_ERR, "Failed to get user identity: user=%s", user);
+        return PAM_USER_UNKNOWN;
     }
 
-    pam_syslog(pamh, LOG_INFO, "Authentication succeeded: user=%s", user);
+    int result = handle_authentication(&identity);
+    print_wrist_result(pamh, user, result);
+    if (result != PAM_SUCCESS) return result;
+
     return PAM_SUCCESS;
 }
 
