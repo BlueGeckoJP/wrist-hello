@@ -9,6 +9,7 @@ mod notify_ready_guard;
 mod pending_notifications;
 mod response_char;
 mod socket_server;
+mod verification_handler;
 
 use std::sync::{Arc, atomic::AtomicBool};
 
@@ -30,6 +31,8 @@ use crate::{
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
 const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6ce566a0a);
+
+const AUTH_IDENTITY_SIZE: usize = std::mem::size_of::<bindings::AuthIdentity>();
 
 fn default_auth_cache_ttl_seconds() -> Option<u64> {
     Some(0)
