@@ -245,10 +245,11 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
         pam_syslog(pamh, LOG_ERR, "Failed to create authentication thread: user=%s", user);
         close(cancel_pipe[0]);
         close(cancel_pipe[1]);
-        return PAM_IGNORE;
+        return PAM_AUTH_ERR;
     }
 
-    pam_info(pamh, "Approve on watch, or press Enter to use password.");
+    pam_info(pamh,
+             "Approve on watch, or press Enter to continue with the next authentication method.");
 
     int tty_fd = open("/dev/tty", O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     if (tty_fd < 0) {
@@ -269,7 +270,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
 
         if (wrist_state == WRIST_FAILED) {
             pam_syslog(pamh, LOG_ERR, "Wrist authentication failed: user=%s", user);
-            result = PAM_IGNORE;
+            result = PAM_AUTH_ERR;
             break;
         }
 

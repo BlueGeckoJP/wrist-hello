@@ -61,7 +61,7 @@ impl PendingNotifications {
         self.send_all(AuthResult::Success)
     }
 
-    /// Sends a failed/denied authentication result and consumes all pending notifications
+    /// Sends a denied authentication result and consumes all pending notifications
     pub fn fail_all(&self) -> eyre::Result<usize> {
         self.send_all(AuthResult::Denied)
     }
