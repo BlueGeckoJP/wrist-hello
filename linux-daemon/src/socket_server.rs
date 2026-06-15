@@ -1,10 +1,7 @@
 use std::{
     mem::{self},
     os::fd::AsRawFd,
-    sync::{
-        Arc,
-        atomic::AtomicBool,
-    },
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use tokio::{
@@ -14,18 +11,22 @@ use tokio::{
 use tracing::{error, info, warn};
 
 use crate::{
-    auth_session::AuthSession,
-    pending_notifications::PendingNotifications,
+    auth_session::AuthSession, pending_notifications::PendingNotifications,
     verification_handler::handle_verification_request,
 };
 
 const SOCKET_PATH: &str = "/run/wrist-hello/auth.sock";
 
-pub struct SocketServer {
+#[derive(Clone)]
+pub struct ServerContext {
     pub challenge_trigger: Arc<Notify>,
     pub pending_notifications: PendingNotifications,
     pub auth_session: AuthSession,
     pub notify_ready: Arc<AtomicBool>,
+}
+
+pub struct SocketServer {
+    ctx: ServerContext,
 }
 
 impl SocketServer {
@@ -35,12 +36,13 @@ impl SocketServer {
         auth_session: AuthSession,
         notify_ready: Arc<AtomicBool>,
     ) -> Self {
-        Self {
+        let ctx = ServerContext {
             challenge_trigger,
             pending_notifications,
             auth_session,
             notify_ready,
-        }
+        };
+        Self { ctx }
     }
 
     pub async fn spawn(self: Arc<Self>) -> eyre::Result<()> {
@@ -71,10 +73,10 @@ impl SocketServer {
                 }
             }
 
-            let server = self.clone();
+            let ctx = self.ctx.clone();
             tokio::spawn(async move {
                 info!("Accepted connection from {:?}", addr);
-                handle_verification_request(&server, &mut stream).await
+                handle_verification_request(&ctx, &mut stream).await
             });
         }
     }

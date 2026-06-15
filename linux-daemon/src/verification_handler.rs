@@ -9,12 +9,12 @@ use tokio::{
 use tracing::{error, info, warn};
 
 use crate::{
-    AUTH_IDENTITY_SIZE, bindings, pending_notifications::AuthResult, socket_server::SocketServer,
+    AUTH_IDENTITY_SIZE, bindings, pending_notifications::AuthResult, socket_server::ServerContext,
 };
 
 const AUTH_TIMEOUT_SECONDS: u64 = 30;
 
-pub async fn handle_verification_request(server: &SocketServer, stream: &mut UnixStream) {
+pub async fn handle_verification_request(server: &ServerContext, stream: &mut UnixStream) {
     let auth_identity = match receive_auth_identity(stream).await {
         Ok(identity) => identity,
         Err(e) => {
