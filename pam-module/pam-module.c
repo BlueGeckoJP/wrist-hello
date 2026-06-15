@@ -147,7 +147,7 @@ WristResultCode handle_wrist_authentication(AuthIdentity* identity, int cancel_f
             return WRIST_READ_SOCKET_ERROR;
         }
 
-        if (fds[1].revents & POLLIN) {
+        if (fds[1].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL)) {
             close(fd);
             return WRIST_AUTH_CANCELLED;
         }
