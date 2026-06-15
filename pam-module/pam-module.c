@@ -134,7 +134,12 @@ WristResultCode handle_wrist_authentication(AuthIdentity* identity, int cancel_f
             {.fd = cancel_fd, .events = POLLIN},
         };
 
-        int poll_result = poll(fds, 2, -1);
+        int poll_result = poll(fds, 2, AUTH_TIMEOUT_SECONDS * 1000);
+        if (poll_result == 0) {
+            close(fd);
+            return WRIST_AUTH_FAILURE;
+        }
+
         if (poll_result < 0) {
             if (errno == EINTR) continue;
 
