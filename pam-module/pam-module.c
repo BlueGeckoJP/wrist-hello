@@ -222,6 +222,21 @@ static bool ends_with_enter(const char* buf, ssize_t len) {
     return false;
 }
 
+static bool write_cancel_signal(pam_handle_t* pamh, int fd, const char* user) {
+    uint8_t cancel = 1;
+
+    while (true) {
+        ssize_t n = write(fd, &cancel, sizeof(cancel));
+
+        if (n == (ssize_t)sizeof(cancel)) return true;
+        if (n < 0 && errno == EINTR) continue;
+
+        pam_syslog(pamh, LOG_ERR, "Failed to write cancel signal: user=%s, error=%s", user,
+                   n < 0 ? strerror(errno) : "short write");
+        return false;
+    }
+}
+
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, const char** argv) {
     (void)flags;
     (void)argc;
@@ -295,8 +310,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
             ssize_t n = read(tty_fd, buf, sizeof(buf));
 
             if (ends_with_enter(buf, n)) {
-                uint8_t cancel = 1;
-                (void)write(cancel_pipe[1], &cancel, sizeof(cancel));
+                write_cancel_signal(pamh, cancel_pipe[1], user);
 
                 pam_syslog(pamh, LOG_INFO,
                            "Wrist authentication skipped by Enter fallback: user=%s", user);
