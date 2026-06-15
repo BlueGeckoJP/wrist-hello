@@ -32,7 +32,7 @@ const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a7
 const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6ce566a0a);
 
 fn default_auth_cache_ttl_seconds() -> Option<u64> {
-    Some(60)
+    Some(0)
 }
 
 #[derive(Deserialize)]
