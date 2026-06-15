@@ -1,4 +1,4 @@
-#define _DEFAULT_SOURCE
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
@@ -239,7 +239,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
     }
     atomic_init(&ctx.state, WRIST_RUNNING);
     int cancel_pipe[2] = {-1, -1};
-    if (pipe(cancel_pipe) != 0) {
+    if (pipe2(cancel_pipe, O_CLOEXEC) != 0) {
         pam_syslog(pamh, LOG_ERR, "Failed to create cancellation pipe: user=%s", user);
         return PAM_AUTH_ERR;
     }
