@@ -66,7 +66,7 @@ pub async fn advertise_service(adapter: &bluer::Adapter) -> eyre::Result<Adverti
     match register_btmgmt_advertisement(adapter.name()) {
         Ok(handle) => {
             info!("Registered advertisement: btmgmt fallback");
-            return Ok(AdvertisementHandle::Btmgmt(handle));
+            Ok(AdvertisementHandle::Btmgmt(handle))
         }
         Err(e) => {
             error!("Failed to register advertisement with btmgmt: {}", e);
