@@ -39,6 +39,7 @@ typedef enum { WRIST_RUNNING, WRIST_SUCCESS, WRIST_FAILED } WristState;
 typedef struct {
     AuthIdentity identity;
     atomic_int state;
+    atomic_int result_code;
     int cancel_fd;
 } WristContext;
 
@@ -172,7 +173,7 @@ WristResultCode handle_wrist_authentication(AuthIdentity* identity, int cancel_f
     }
 }
 
-void print_wrist_result(pam_handle_t* pamh, const char* user, WristResultCode code) {
+static void print_wrist_result(pam_handle_t* pamh, const char* user, WristResultCode code) {
     switch (code) {
         case WRIST_AUTH_SUCCESS:
             pam_syslog(pamh, LOG_INFO, "Authentication succeeded: user=%s", user);
@@ -202,6 +203,7 @@ static void* wrist_auth_thread(void* arg) {
     WristContext* ctx = (WristContext*)arg;
 
     WristResultCode result = handle_wrist_authentication(&ctx->identity, ctx->cancel_fd);
+    atomic_store(&ctx->result_code, result);
     if (result == WRIST_AUTH_SUCCESS) {
         atomic_store(&ctx->state, WRIST_SUCCESS);
     } else {
@@ -253,6 +255,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
         return PAM_AUTH_ERR;
     }
     atomic_init(&ctx.state, WRIST_RUNNING);
+    atomic_init(&ctx.result_code, WRIST_AUTH_FAILURE);
     int cancel_pipe[2] = {-1, -1};
     if (pipe2(cancel_pipe, O_CLOEXEC) != 0) {
         pam_syslog(pamh, LOG_ERR, "Failed to create cancellation pipe: user=%s", user);
@@ -290,6 +293,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
 
         if (wrist_state == WRIST_FAILED) {
             pam_syslog(pamh, LOG_ERR, "Wrist authentication failed: user=%s", user);
+            print_wrist_result(pamh, user, atomic_load(&ctx.result_code));
             result = PAM_AUTH_ERR;
             break;
         }
