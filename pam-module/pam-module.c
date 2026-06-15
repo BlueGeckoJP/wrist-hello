@@ -22,7 +22,7 @@
 
 #define SOCKET_PATH "/run/wrist-hello/auth.sock"
 #define BUF_SIZE 256
-#define AUTH_TIMEOUT_SECONDS 30
+#define SOCKET_POLL_INTERVAL_MILLIS 100
 
 typedef enum {
     WRIST_AUTH_SUCCESS,
@@ -84,11 +84,6 @@ int open_socket(const char* socket_path) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
 
-    struct timeval tv;
-    tv.tv_sec = AUTH_TIMEOUT_SECONDS;
-    tv.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
     struct sockaddr_un addr = {
         .sun_family = AF_UNIX,
     };
@@ -135,10 +130,9 @@ WristResultCode handle_wrist_authentication(AuthIdentity* identity, int cancel_f
             {.fd = cancel_fd, .events = POLLIN},
         };
 
-        int poll_result = poll(fds, 2, AUTH_TIMEOUT_SECONDS * 1000);
+        int poll_result = poll(fds, 2, SOCKET_POLL_INTERVAL_MILLIS);
         if (poll_result == 0) {
-            close(fd);
-            return WRIST_AUTH_FAILURE;
+            continue;
         }
 
         if (poll_result < 0) {
@@ -313,6 +307,12 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
             char buf[256];
             ssize_t n = read(tty_fd, buf, sizeof(buf));
 
+            // TODO: Propagate Enter fallback cancellation from the PAM module to the daemon.
+            // The current cancel pipe only stops the PAM-side waiting thread. If an
+            // AuthRequest is already queued in AuthProcessor, it can still be processed
+            // later and trigger a watch challenge even though PAM has already returned
+            // PAM_IGNORE. Add a daemon-visible cancel signal over the auth socket and remove
+            // the matching queued/in-progress request when it is received.
             if (ends_with_enter(buf, n)) {
                 write_cancel_signal(pamh, cancel_pipe[1], user);
 
