@@ -135,13 +135,58 @@ impl AuthProcessor {
         .await
         {
             Ok(Some(AuthResult::Success { challenge })) => {
-                // TODO: Verify that the challenge in the success result matches the current challenge
                 info!("Received successful verification notification");
-                true
+
+                match self.current_challenge.take_if_matches(&challenge) {
+                    Ok(true) => {
+                        info!(
+                            "Challenge in verification notification matches current challenge, treating as successful verification"
+                        );
+
+                        if let Err(e) = self.auth_session.mark_verified() {
+                            error!("Failed to mark session as verified: {}", e);
+                            return false;
+                        }
+
+                        true
+                    }
+                    Ok(false) => {
+                        error!(
+                            "Received challenge in verification notification does not match current challenge, treating as failed verification"
+                        );
+                        false
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to take current challenge: {}, treating as failed verification",
+                            e
+                        );
+                        false
+                    }
+                }
             }
             Ok(Some(AuthResult::Denied { challenge })) => {
-                // TODO: Verify that the challenge in the deny result matches the current challenge
                 info!("Received denied verification notification");
+
+                match self.current_challenge.take_if_matches(&challenge) {
+                    Ok(true) => {
+                        info!(
+                            "Challenge in denied verification notification matches current challenge, treating as explicit denial"
+                        );
+                    }
+                    Ok(false) => {
+                        error!(
+                            "Received challenge in denied verification notification does not match current challenge, treating as failed verification"
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to take current challenge: {}, treating as failed verification",
+                            e
+                        );
+                    }
+                }
+
                 false
             }
             Ok(None) => {

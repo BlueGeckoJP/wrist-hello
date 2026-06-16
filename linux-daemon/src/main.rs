@@ -117,7 +117,6 @@ async fn main() -> eyre::Result<()> {
                 ),
                 response_char::generate_response_char(
                     current_challenge.clone(),
-                    auth_session.clone(),
                     app_config.public_key_der_hex.clone(),
                     wrist_result_tx.clone(),
                 ),

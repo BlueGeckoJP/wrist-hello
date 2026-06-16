@@ -27,20 +27,6 @@ impl CurrentChallenge {
         Ok(ch)
     }
 
-    /// Takes the current challenge, consuming it and returning the value
-    pub fn take(&self) -> eyre::Result<[u8; 32]> {
-        let challenge = self
-            .challenge
-            .lock()
-            .map_err(|_| eyre::eyre!("Failed to acquire lock on current challenge"))?
-            .take();
-
-        match challenge {
-            Some(ch) => Ok(ch),
-            None => eyre::bail!("Current challenge is not set"),
-        }
-    }
-
     pub fn take_if_matches(&self, expected: &[u8]) -> eyre::Result<bool> {
         let mut challenge = self
             .challenge
@@ -53,6 +39,20 @@ impl CurrentChallenge {
                 Ok(true)
             }
             Some(_) => Ok(false),
+            None => eyre::bail!("Current challenge is not set"),
+        }
+    }
+
+    pub fn peek(&self) -> eyre::Result<[u8; 32]> {
+        let challenge = self
+            .challenge
+            .lock()
+            .map_err(|_| eyre::eyre!("Failed to acquire lock on current challenge"))?
+            .as_ref()
+            .cloned();
+
+        match challenge {
+            Some(ch) => Ok(ch),
             None => eyre::bail!("Current challenge is not set"),
         }
     }
