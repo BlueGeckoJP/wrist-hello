@@ -143,6 +143,16 @@ WristResultCode handle_wrist_authentication(AuthIdentity* identity, int cancel_f
         }
 
         if (fds[1].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL)) {
+            uint8_t msg = AUTH_MSG_PAM_CANCELLED;
+            while (true) {
+                ssize_t n = write(fd, &msg, sizeof(msg));
+
+                if (n == (ssize_t)sizeof(msg)) break;
+                if (n < 0 && errno == EINTR) continue;
+
+                break;
+            }
+
             close(fd);
             return WRIST_AUTH_CANCELLED;
         }
@@ -307,12 +317,6 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, cons
             char buf[256];
             ssize_t n = read(tty_fd, buf, sizeof(buf));
 
-            // TODO: Propagate Enter fallback cancellation from the PAM module to the daemon.
-            // The current cancel pipe only stops the PAM-side waiting thread. If an
-            // AuthRequest is already queued in AuthProcessor, it can still be processed
-            // later and trigger a watch challenge even though PAM has already returned
-            // PAM_IGNORE. Add a daemon-visible cancel signal over the auth socket and remove
-            // the matching queued/in-progress request when it is received.
             if (ends_with_enter(buf, n)) {
                 write_cancel_signal(pamh, cancel_pipe[1], user);
 

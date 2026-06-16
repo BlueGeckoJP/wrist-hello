@@ -8,8 +8,11 @@ use std::{
 };
 
 use tokio::{
-    sync::{Notify, mpsc},
-    time::timeout,
+    sync::{
+        Notify, mpsc,
+        oneshot::{self, error::TryRecvError},
+    },
+    time::{error::Elapsed, timeout},
 };
 use tracing::{error, info};
 
@@ -30,6 +33,7 @@ pub enum AuthResult {
 pub struct AuthRequest {
     pub identity: AuthIdentity,
     pub result_tx: mpsc::Sender<bool>,
+    pub cancel_rx: oneshot::Receiver<()>,
 }
 
 pub struct AuthProcessor {
@@ -37,7 +41,6 @@ pub struct AuthProcessor {
     wrist_start_notify: Arc<Notify>,
     wrist_result_rx: mpsc::Receiver<AuthResult>,
 
-    in_progress: Option<AuthRequest>,
     current_challenge: CurrentChallenge,
 
     queue: VecDeque<AuthRequest>,
@@ -59,7 +62,6 @@ impl AuthProcessor {
             add_queue_rx,
             wrist_start_notify,
             wrist_result_rx,
-            in_progress: None,
             current_challenge,
             queue: VecDeque::new(),
             auth_session,
@@ -93,47 +95,88 @@ impl AuthProcessor {
                     continue;
                 }
 
-                let request = match self.queue.pop_front() {
+                let mut request = match self.queue.pop_front() {
                     Some(req) => req,
                     None => continue,
                 };
 
-                self.in_progress = Some(request);
+                match request.cancel_rx.try_recv() {
+                    Ok(()) | Err(TryRecvError::Closed) => {
+                        info!(
+                            "AuthRequest cancelled before processing for uid={}, skipping",
+                            request.identity.uid
+                        );
+                        continue;
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
 
-                let verified = self.handle_verification().await;
+                let verified = self.handle_verification(&mut request.cancel_rx).await;
 
-                if let Some(req) = self.in_progress.take() {
-                    let _ = req.result_tx.send(verified).await;
+                if let Some(verified) = verified
+                    && let Err(e) = request.result_tx.send(verified).await
+                {
+                    error!(
+                        "Failed to send AuthRequest result to handler for uid={}: {}",
+                        request.identity.uid, e
+                    );
                 }
             }
         });
     }
 
-    async fn handle_verification(&mut self) -> bool {
+    async fn handle_verification(&mut self, cancel_rx: &mut oneshot::Receiver<()>) -> Option<bool> {
         if let Ok(true) = self.auth_session.is_verified() {
             info!("Session already verified, skipping verification");
-            return true;
+            return Some(true);
         }
 
         if !self.notify_ready.load(Ordering::SeqCst) {
             error!("Notify not ready, cannot process verification request");
-            return false;
+            return Some(false);
         }
+
+        self.drain_stale_wrist_results();
 
         if let Err(e) = self.current_challenge.refresh() {
             error!("Failed to refresh challenge: {}, skipping this request", e);
-            return false;
+            return Some(false);
         }
 
         info!("Triggering challenge for verification request");
         self.wrist_start_notify.notify_one();
 
-        match timeout(
-            Duration::from_secs(AUTH_TIMEOUT_SECONDS),
-            self.wrist_result_rx.recv(),
-        )
-        .await
-        {
+        tokio::select! {
+            biased;
+
+            _ = cancel_rx => {
+                info!("AuthRequest cancelled while in progress");
+                None
+            }
+
+            result = timeout(
+                Duration::from_secs(AUTH_TIMEOUT_SECONDS),
+                self.wrist_result_rx.recv(),
+            ) => {
+                Some(self.handle_wrist_result(result).await)
+            }
+        }
+    }
+
+    fn drain_stale_wrist_results(&mut self) {
+        let mut drained = 0;
+
+        while self.wrist_result_rx.try_recv().is_ok() {
+            drained += 1;
+        }
+
+        if drained > 0 {
+            info!("Drained {} stale wrist results from channel", drained);
+        }
+    }
+
+    async fn handle_wrist_result(&self, result: Result<Option<AuthResult>, Elapsed>) -> bool {
+        match result {
             Ok(Some(AuthResult::Success { challenge })) => {
                 info!("Received successful verification notification");
 

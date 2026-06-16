@@ -3,7 +3,7 @@ use std::mem::MaybeUninit;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
 };
 use tracing::{error, info, warn};
 
@@ -19,11 +19,13 @@ pub async fn handle_verification_request(server: &ServerContext, stream: &mut Un
     };
 
     let (result_tx, mut result_rx) = mpsc::channel(1);
+    let (cancel_tx, cancel_rx) = oneshot::channel();
     if let Err(e) = server
         .add_queue_tx
         .send(crate::auth_processor::AuthRequest {
             identity: auth_identity,
             result_tx,
+            cancel_rx,
         })
         .await
     {
@@ -31,27 +33,61 @@ pub async fn handle_verification_request(server: &ServerContext, stream: &mut Un
         return;
     }
 
-    let verified = result_rx.recv().await.unwrap_or_else(|| {
-        warn!("AuthProcessor dropped the result channel without sending a response");
-        false
-    });
+    tokio::select! {
+        biased;
 
-    let response = if verified { [0u8] } else { [1u8] };
+        cancel = read_cancel_from_stream(stream) => {
+            let cancel = cancel.unwrap_or_else(|e| {
+                warn!("Failed to read cancel signal from client: {}", e);
+                0
+            });
 
-    if let Err(e) = reply_to_stream(stream, &response).await {
-        error!(
-            "Failed to send response to client: response={:?}, error={}",
-            response, e
-        );
+            if cancel as u32 != bindings::AUTH_MSG_PAM_CANCELLED {
+                warn!("Received unexpected cancel signal from client: {}", cancel);
+                return;
+            }
+
+            let _ = cancel_tx.send(());
+            info!("Received cancel signal from client, cancelling authentication request");
+        }
+
+        result = result_rx.recv() => {
+            let verified = result.unwrap_or_else(|| {
+                warn!("AuthProcessor dropped the result channel without sending a response");
+                false
+            });
+
+            let response = if verified { [0u8] } else { [1u8] };
+
+            if let Err(e) = reply_to_stream(stream, &response).await {
+                error!(
+                    "Failed to send response to client: response={:?}, error={}",
+                    response, e
+                );
+            }
+
+            if verified {
+                info!(
+                    "Verified client: uid={}, tty={}, service={}",
+                    auth_identity.uid,
+                    c_bytes_to_string(&auth_identity.tty),
+                    c_bytes_to_string(&auth_identity.service)
+                );
+            }
+        }
     }
+}
 
-    if verified {
-        info!(
-            "Verified client: uid={}, tty={}, service={}",
-            auth_identity.uid,
-            c_bytes_to_string(&auth_identity.tty),
-            c_bytes_to_string(&auth_identity.service)
-        );
+async fn read_cancel_from_stream(stream: &mut UnixStream) -> eyre::Result<u8> {
+    let mut buf = [0u8; 1];
+    match stream.read_exact(&mut buf).await {
+        Ok(0) => {
+            eyre::bail!("Client disconnected");
+        }
+        Ok(_) => Ok(buf[0]),
+        Err(e) => {
+            eyre::bail!("Failed to read cancel signal from client: {}", e);
+        }
     }
 }
 
