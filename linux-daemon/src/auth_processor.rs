@@ -72,7 +72,16 @@ impl AuthProcessor {
     pub fn spawn(mut self) {
         tokio::spawn(async move {
             loop {
-                if let Ok(req) = self.add_queue_rx.try_recv() {
+                let incoming_request = if self.queue.is_empty() {
+                    match self.add_queue_rx.recv().await {
+                        Some(req) => Some(req),
+                        None => break,
+                    }
+                } else {
+                    self.add_queue_rx.try_recv().ok()
+                };
+
+                if let Some(req) = incoming_request {
                     if (self.queue.iter().find(|r| r.identity == req.identity)).is_some() {
                         info!(
                             "Received duplicate AuthRequest for uid={}, ignoring",
@@ -88,11 +97,6 @@ impl AuthProcessor {
                         self.queue.back().unwrap().identity.uid,
                         self.queue.len()
                     );
-                }
-
-                if self.queue.is_empty() {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    continue;
                 }
 
                 let mut request = match self.queue.pop_front() {
