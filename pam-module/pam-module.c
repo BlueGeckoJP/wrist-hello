@@ -23,11 +23,13 @@
 #define SOCKET_PATH "/run/wrist-hello/auth.sock"
 #define BUF_SIZE 256
 #define SOCKET_POLL_INTERVAL_MILLIS 100
+#define AUTH_TIMEOUT_SECONDS 90
 
 typedef enum {
     WRIST_AUTH_SUCCESS,
     WRIST_AUTH_FAILURE,
     WRIST_AUTH_CANCELLED,
+    WRIST_AUTH_TIMEOUT,
     WRIST_OPEN_SOCKET_ERROR,
     WRIST_WRITE_SOCKET_ERROR,
     WRIST_SOCKET_CLOSED_ERROR,
@@ -124,13 +126,25 @@ WristResultCode handle_wrist_authentication(AuthIdentity* identity, int cancel_f
         remaining -= (size_t)n;
     }
 
+    time_t deadline = time(NULL) + AUTH_TIMEOUT_SECONDS;
     while (true) {
+        time_t now = time(NULL);
+        if (now >= deadline) {
+            close(fd);
+            return WRIST_AUTH_TIMEOUT;
+        }
+
+        int remaining_ms = (int)((deadline - now) * 1000);
+        if (remaining_ms > SOCKET_POLL_INTERVAL_MILLIS) {
+            remaining_ms = SOCKET_POLL_INTERVAL_MILLIS;
+        }
+
         struct pollfd fds[2] = {
             {.fd = fd, .events = POLLIN},
             {.fd = cancel_fd, .events = POLLIN},
         };
 
-        int poll_result = poll(fds, 2, SOCKET_POLL_INTERVAL_MILLIS);
+        int poll_result = poll(fds, 2, remaining_ms);
         if (poll_result == 0) {
             continue;
         }
@@ -187,6 +201,9 @@ static void print_wrist_result(pam_handle_t* pamh, const char* user, WristResult
             break;
         case WRIST_AUTH_CANCELLED:
             pam_syslog(pamh, LOG_ERR, "Authentication cancelled: user=%s", user);
+            break;
+        case WRIST_AUTH_TIMEOUT:
+            pam_syslog(pamh, LOG_ERR, "Authentication timed out: user=%s", user);
             break;
         case WRIST_OPEN_SOCKET_ERROR:
             pam_syslog(pamh, LOG_ERR, "Failed to open socket: user=%s", user);
