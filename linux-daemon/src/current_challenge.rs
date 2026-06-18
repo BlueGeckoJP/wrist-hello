@@ -4,7 +4,8 @@ use rand::RngExt;
 
 /// Represents the current authentication challenge that can be read by the wearos-app client and is updated on each read/notify request
 /// The contents of the challenge are simply a random sequence of 32 `u8` values
-/// This structure only consumes the challenge after a successful read or match to prevent the same challenge from being reused
+/// Reads and signature verification use non-consuming copies. Only `take_if_matches`
+/// consumes the challenge after a successful match to prevent stale responses from being reused.
 #[derive(Clone, Default)]
 pub struct CurrentChallenge {
     challenge: Arc<Mutex<Option<[u8; 32]>>>,

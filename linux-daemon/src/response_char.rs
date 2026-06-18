@@ -46,6 +46,9 @@ pub fn generate_response_char(
 /// challenge is treated as an explicit deny response from the
 /// wearos-app client. Otherwise, the value is treated as a DER-encoded ECDSA
 /// signature and verified against the current challenge
+///
+/// This handler only classifies/verifies the write and forwards an `AuthResult`.
+/// `AuthProcessor` owns the final request decision and consumes the matching challenge.
 async fn handle_response_write(
     new_value: Vec<u8>,
     current_challenge: CurrentChallenge,
