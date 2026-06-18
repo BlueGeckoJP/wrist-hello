@@ -4,10 +4,9 @@ mod bindings {
 mod advertisement_handle;
 mod auth_processor;
 mod auth_session;
-mod challenge_char;
+mod characteristics;
 mod current_challenge;
 mod notify_ready_guard;
-mod response_char;
 mod socket_server;
 mod verification_handler;
 
@@ -110,12 +109,12 @@ async fn main() -> eyre::Result<()> {
             uuid: SERVICE_UUID,
             primary: true,
             characteristics: vec![
-                challenge_char::generate_challenge_char(
+                characteristics::challenge_char::generate_challenge_char(
                     current_challenge.clone(),
                     notify_ready.clone(),
                     wrist_start_notify.clone(),
                 ),
-                response_char::generate_response_char(
+                characteristics::response_char::generate_response_char(
                     current_challenge.clone(),
                     app_config.public_key_der_hex.clone(),
                     wrist_result_tx.clone(),
