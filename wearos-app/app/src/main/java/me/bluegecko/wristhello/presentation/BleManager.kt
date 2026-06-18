@@ -45,6 +45,11 @@ private sealed class ApprovalResult {
     data object Cancelled : ApprovalResult()
 }
 
+private class PendingApproval(
+    val challenge: ByteArray,
+    val result: CompletableDeferred<ApprovalResult>
+)
+
 class BleManager(
     private val context: Context,
     private val keyStoreManager: KeystoreManager,
@@ -58,8 +63,7 @@ class BleManager(
     private val _bleState = MutableStateFlow<BleState>(BleState.Disconnected)
     val bleState: StateFlow<BleState> = _bleState
 
-    private val _challengeData = MutableStateFlow<ByteArray?>(null)
-    private var pendingApproval: CompletableDeferred<ApprovalResult>? = null
+    private var pendingApproval: PendingApproval? = null
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun findDeviceByServiceUuid(context: Context, targetUuid: UUID): BluetoothDevice? {
@@ -100,11 +104,11 @@ class BleManager(
     }
 
     fun approvePendingChallenge() {
-        pendingApproval?.complete(ApprovalResult.Approved)
+        pendingApproval?.result?.complete(ApprovalResult.Approved)
     }
 
     fun denyPendingChallenge() {
-        pendingApproval?.complete(ApprovalResult.Denied)
+        pendingApproval?.result?.complete(ApprovalResult.Denied)
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -174,16 +178,16 @@ class BleManager(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
         ) {
-            if (characteristic.uuid == CHALLENGE_CHAR_UUID) {
-                scope.launch {
-                    handleChallenge(gatt, value)
-                }
-            } else if (characteristic.uuid == CANCEL_CHAR_UUID) {
-                Log.d("BleManager", "Received cancel notification")
-                if (pendingApproval != null && _challengeData.value.contentEquals(value)) {
-                    Log.i("BleManager", "Challenge canceled by device")
-                    pendingApproval?.complete(ApprovalResult.Cancelled)
-                    onCancelReceived?.invoke()
+            when (characteristic.uuid) {
+                CHALLENGE_CHAR_UUID -> scope.launch { handleChallenge(gatt, value) }
+                CANCEL_CHAR_UUID -> {
+                    Log.d("BleManager", "Received cancel notification")
+                    val pending = pendingApproval
+                    if (pending != null && pending.challenge.contentEquals(value)) {
+                        Log.i("BleManager", "Challenge canceled by device")
+                        pending.result.complete(ApprovalResult.Cancelled)
+                        onCancelReceived?.invoke()
+                    }
                 }
             }
         }
@@ -227,10 +231,10 @@ class BleManager(
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private suspend fun handleChallenge(gatt: BluetoothGatt, challenge: ByteArray) {
-        _challengeData.value = challenge
 
         val approval = CompletableDeferred<ApprovalResult>()
-        pendingApproval = approval
+        val pending = PendingApproval(challenge, approval)
+        pendingApproval = pending
 
         onChallengeReceived?.invoke()
 
@@ -238,7 +242,7 @@ class BleManager(
             approval.await()
         } ?: ApprovalResult.Denied
 
-        if (pendingApproval == approval) {
+        if (pendingApproval === pending) {
             pendingApproval = null
         }
 
@@ -249,7 +253,6 @@ class BleManager(
                 }
                 val response = keyStoreManager.signChallenge(challenge) ?: return
                 writeResponse(gatt, response)
-                _challengeData.value = null
             }
 
             ApprovalResult.Denied -> {
