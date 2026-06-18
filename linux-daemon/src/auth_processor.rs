@@ -38,8 +38,10 @@ pub struct AuthRequest {
 
 pub struct AuthProcessor {
     add_queue_rx: mpsc::Receiver<AuthRequest>,
-    wrist_start_notify: Arc<Notify>,
     wrist_result_rx: mpsc::Receiver<AuthResult>,
+    cancel_notify_tx: mpsc::Sender<[u8; 32]>,
+
+    wrist_start_notify: Arc<Notify>,
 
     current_challenge: CurrentChallenge,
 
@@ -57,6 +59,7 @@ impl AuthProcessor {
         auth_session: AuthSession,
         current_challenge: CurrentChallenge,
         notify_ready: Arc<AtomicBool>,
+        cancel_notify_tx: mpsc::Sender<[u8; 32]>,
     ) -> Self {
         Self {
             add_queue_rx,
@@ -66,6 +69,7 @@ impl AuthProcessor {
             queue: VecDeque::new(),
             auth_session,
             notify_ready,
+            cancel_notify_tx,
         }
     }
 
@@ -155,6 +159,19 @@ impl AuthProcessor {
 
             _ = cancel_rx => {
                 info!("AuthRequest cancelled while in progress");
+
+                let challenge = match self.current_challenge.peek() {
+                    Ok(challenge) => challenge,
+                    Err(e) => {
+                        error!("Failed to peek current challenge: {}, cannot send cancel notification to wrist", e);
+                        return None;
+                    }
+                };
+
+                if let Err(e) = self.cancel_notify_tx.send(challenge).await {
+                    error!("Failed to send cancel notification to wrist: {}", e);
+                }
+
                 None
             }
 

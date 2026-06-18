@@ -29,6 +29,7 @@ use crate::{
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
 const CHALLENGE_CHAR_UUID: Uuid = Uuid::from_u128(0x5794ca86_3a5e_45ca_85f9_42a74cd460a7);
 const RESPONSE_CHAR_UUID: Uuid = Uuid::from_u128(0xf68c58c2_a1f2_456f_a118_f1c6ce566a0a);
+const CANCEL_CHAR_UUID: Uuid = Uuid::from_u128(0x2679d328_1fb9_4cd5_9efe_382a723bcad7);
 
 const AUTH_IDENTITY_SIZE: usize = std::mem::size_of::<bindings::AuthIdentity>();
 pub const AUTH_TIMEOUT_SECONDS: u64 = 30;
@@ -88,12 +89,17 @@ async fn main() -> eyre::Result<()> {
             .auth_cache_ttl_seconds
             .expect("auth_cache_ttl_seconds must be set in config"),
     );
-    let notify_ready = Arc::new(AtomicBool::new(false));
     let current_challenge = CurrentChallenge::default();
 
-    let (add_queue_tx, add_queue_rx) = mpsc::channel(100);
+    let notify_ready = Arc::new(AtomicBool::new(false));
+    let cancel_notify_ready = Arc::new(AtomicBool::new(false));
+
     let wrist_start_notify = Arc::new(Notify::new());
+
+    let (add_queue_tx, add_queue_rx) = mpsc::channel(100);
     let (wrist_result_tx, wrist_result_rx) = mpsc::channel(1);
+    let (cancel_notify_tx, cancel_notify_rx) = mpsc::channel(1);
+
     let auth_processor = auth_processor::AuthProcessor::new(
         add_queue_rx,
         wrist_start_notify.clone(),
@@ -101,6 +107,7 @@ async fn main() -> eyre::Result<()> {
         auth_session.clone(),
         current_challenge.clone(),
         notify_ready.clone(),
+        cancel_notify_tx,
     );
     auth_processor.spawn();
 
@@ -118,6 +125,10 @@ async fn main() -> eyre::Result<()> {
                     current_challenge.clone(),
                     app_config.public_key_der_hex.clone(),
                     wrist_result_tx.clone(),
+                ),
+                characteristics::cancel_characteristic::generate_cancel_char(
+                    cancel_notify_rx,
+                    cancel_notify_ready,
                 ),
             ],
 
