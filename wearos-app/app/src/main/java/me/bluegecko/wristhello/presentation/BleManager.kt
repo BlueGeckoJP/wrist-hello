@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
@@ -24,6 +25,7 @@ import kotlin.time.Duration.Companion.milliseconds
 private val SERVICE_UUID = UUID.fromString("ddc6ea97-db6e-4ecd-a3ff-0143368ef829")
 private val CHALLENGE_CHAR_UUID = UUID.fromString("5794ca86-3a5e-45ca-85f9-42a74cd460a7")
 private val RESPONSE_CHAR_UUID = UUID.fromString("f68c58c2-a1f2-456f-a118-f1c6ce566a0a")
+private val CANCEL_CHAR_UUID = UUID.fromString("2679d328-1fb9-4cd5-9efe-382a723bcad7")
 
 private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
@@ -37,19 +39,27 @@ sealed class BleState {
     data class Error(val message: String) : BleState()
 }
 
+private sealed class ApprovalResult {
+    data object Approved : ApprovalResult()
+    data object Denied : ApprovalResult()
+    data object Cancelled : ApprovalResult()
+}
+
 class BleManager(
     private val context: Context,
     private val keyStoreManager: KeystoreManager,
     private val scope: CoroutineScope,
     private val onChallengeReceived: (() -> Unit)? = null,
-    private var pendingApproval: CompletableDeferred<Boolean>? = null
+    private val onCancelReceived: (() -> Unit)? = null,
 ) {
     private var gatt: BluetoothGatt? = null
+    private val notifyEnableQueue = ArrayDeque<BluetoothGattCharacteristic>()
 
     private val _bleState = MutableStateFlow<BleState>(BleState.Disconnected)
     val bleState: StateFlow<BleState> = _bleState
 
     private val _challengeData = MutableStateFlow<ByteArray?>(null)
+    private var pendingApproval: CompletableDeferred<ApprovalResult>? = null
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun findDeviceByServiceUuid(context: Context, targetUuid: UUID): BluetoothDevice? {
@@ -90,11 +100,11 @@ class BleManager(
     }
 
     fun approvePendingChallenge() {
-        pendingApproval?.complete(true)
+        pendingApproval?.complete(ApprovalResult.Approved)
     }
 
     fun denyPendingChallenge() {
-        pendingApproval?.complete(false)
+        pendingApproval?.complete(ApprovalResult.Denied)
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -109,6 +119,7 @@ class BleManager(
                 }
 
                 BluetoothProfile.STATE_DISCONNECTED -> {
+                    notifyEnableQueue.clear()
                     _bleState.value = BleState.Disconnected
                     gatt.close()
                     this@BleManager.gatt = null
@@ -128,17 +139,33 @@ class BleManager(
                 return
             }
 
+            val service = gatt.getService(SERVICE_UUID)
             val challengeChar =
-                gatt.getService(SERVICE_UUID)?.getCharacteristic(CHALLENGE_CHAR_UUID)
+                service?.getCharacteristic(CHALLENGE_CHAR_UUID)
+            val cancelChar =
+                service?.getCharacteristic(CANCEL_CHAR_UUID)
 
-            if (challengeChar == null) {
-                _bleState.value = BleState.Error("CHALLENGE_CHAR not found")
+            if (challengeChar == null || cancelChar == null) {
+                _bleState.value = BleState.Error("CHALLENGE_CHAR or CANCEL_CHAR not found")
                 return
             }
 
-            enableNotify(gatt, challengeChar)
+            enableNotify(gatt, listOf(challengeChar, cancelChar))
+        }
 
-            _bleState.value = BleState.Connected
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onDescriptorWrite(
+            gatt: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int
+        ) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                notifyEnableQueue.clear()
+                _bleState.value = BleState.Error("Failed to enable notify: status=$status")
+                return
+            }
+
+            enableNextNotify(gatt)
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -151,46 +178,87 @@ class BleManager(
                 scope.launch {
                     handleChallenge(gatt, value)
                 }
+            } else if (characteristic.uuid == CANCEL_CHAR_UUID) {
+                Log.d("BleManager", "Received cancel notification")
+                if (pendingApproval != null && _challengeData.value.contentEquals(value)) {
+                    Log.i("BleManager", "Challenge canceled by device")
+                    pendingApproval?.complete(ApprovalResult.Cancelled)
+                    onCancelReceived?.invoke()
+                }
             }
         }
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private fun enableNotify(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+    private fun enableNotify(
+        gatt: BluetoothGatt,
+        characteristics: List<BluetoothGattCharacteristic>
+    ) {
+        notifyEnableQueue.clear()
+        notifyEnableQueue.addAll(characteristics)
+        enableNextNotify(gatt)
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun enableNextNotify(gatt: BluetoothGatt) {
+        if (notifyEnableQueue.isEmpty()) {
+            _bleState.value = BleState.Connected
+            return
+        }
+
+        val characteristic = notifyEnableQueue.removeFirst()
         gatt.setCharacteristicNotification(characteristic, true)
 
-        val descriptor = characteristic.getDescriptor(CCCD_UUID) ?: return
-        gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        val descriptor = characteristic.getDescriptor(CCCD_UUID)
+        if (descriptor == null) {
+            enableNextNotify(gatt)
+            return
+        }
+
+        val status = gatt.writeDescriptor(
+            descriptor,
+            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        )
+        if (status != BluetoothStatusCodes.SUCCESS) {
+            notifyEnableQueue.clear()
+            _bleState.value = BleState.Error("Failed to enable notify: status=$status")
+        }
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private suspend fun handleChallenge(gatt: BluetoothGatt, challenge: ByteArray) {
         _challengeData.value = challenge
 
-        val approval = CompletableDeferred<Boolean>()
+        val approval = CompletableDeferred<ApprovalResult>()
         pendingApproval = approval
 
         onChallengeReceived?.invoke()
 
-        val approved = withTimeoutOrNull(APPROVE_TIMEOUT_MILLIS.milliseconds) {
+        val result = withTimeoutOrNull(APPROVE_TIMEOUT_MILLIS.milliseconds) {
             approval.await()
-        } == true
+        } ?: ApprovalResult.Denied
 
         if (pendingApproval == approval) {
             pendingApproval = null
         }
 
-        if (!approved) {
-            writeResponse(gatt, DENY_RESPONSE + challenge)
-            return
-        }
+        when (result) {
+            ApprovalResult.Approved -> {
+                if (!keyStoreManager.hasKey()) {
+                    keyStoreManager.getOrGenerateRawPublicKey()
+                }
+                val response = keyStoreManager.signChallenge(challenge) ?: return
+                writeResponse(gatt, response)
+                _challengeData.value = null
+            }
 
-        if (!keyStoreManager.hasKey()) {
-            keyStoreManager.getOrGenerateRawPublicKey()
-        }
-        val response = keyStoreManager.signChallenge(challenge) ?: return
+            ApprovalResult.Denied -> {
+                writeResponse(gatt, DENY_RESPONSE + challenge)
+                return
+            }
 
-        writeResponse(gatt, response)
+            ApprovalResult.Cancelled -> return
+        }
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)

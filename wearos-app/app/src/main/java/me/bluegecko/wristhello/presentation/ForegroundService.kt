@@ -51,7 +51,8 @@ class ForegroundService : Service() {
             context = applicationContext,
             keyStoreManager = KeystoreManager(),
             scope = scope,
-            onChallengeReceived = { showChallengeNotification() }
+            onChallengeReceived = { showChallengeNotification() },
+            onCancelReceived = { cancelChallengeNotification() }
         )
 
         scope.launch {
