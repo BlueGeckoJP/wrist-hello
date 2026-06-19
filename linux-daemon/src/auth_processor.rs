@@ -23,7 +23,7 @@ use crate::{
 
 /// Represents the result of an authentication attempt
 /// This enum does not include `Failure`; failures are represented simply as errors
-/// `Denied` represents an explicit user denial or approval timeout
+/// `Denied` represents an explicit user denial from the wrist client
 #[derive(Clone, Copy)]
 pub enum AuthResult {
     Success { challenge: [u8; 32] },

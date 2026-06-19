@@ -82,7 +82,7 @@ wearos-app側でユーザーからサインインの承認がおりた場合は�
 - pam-moduleから受け取った認証要求をFIFOで直列に処理する
 - pam-moduleからキャンセル通知を受け取った場合、対象の認証要求をキャンセルする
 - PC側の認証プロセスはここで行われる
-- challenge/response characteristicsを提供する
+- challenge/response/cancel characteristicsを提供する
 - pam-moduleから認証開始を受け取ったら新しいchallenge characteristicを設定しwearos-appに通知する
 - wearos-appから受け取ったデータが成功候補(署名済みデータ)か失敗(`0x00` + challenge のdeny response)かを判断する
 - wearos-appから受け取った署名を公開鍵で検証し、現在処理中のchallengeと一致する場合だけ認証結果として受理する
@@ -92,6 +92,7 @@ wearos-app側でユーザーからサインインの承認がおりた場合は�
 ### wearos-app
 
 - BLE経由でchallenge characteristicを受け取る
+- BLE経由でcancel characteristicを購読し、進行中のchallengeがキャンセルされた場合は承認待ち通知を閉じる
 - 通知を通してユーザーにサインインの承諾を得る
 - サインインの承諾が得られない場合、即時`0x00` + challenge のdeny responseをlinux-daemonに返す
 - サインインの承諾が得られた場合、Android Keystoreに保持してある秘密鍵でchallengeに署名する
