@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define AUTH_MSG_PAM_CANCELLED 0xff
+
 typedef struct {
     uint32_t uid;
     char tty[128];

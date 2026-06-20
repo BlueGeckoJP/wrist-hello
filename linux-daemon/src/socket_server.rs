@@ -1,28 +1,22 @@
 use std::{
     mem::{self},
     os::fd::AsRawFd,
-    sync::{Arc, atomic::AtomicBool},
+    sync::Arc,
 };
 
 use tokio::{
     net::{UnixListener, UnixStream},
-    sync::Notify,
+    sync::mpsc,
 };
 use tracing::{error, info, warn};
 
-use crate::{
-    auth_session::AuthSession, pending_notifications::PendingNotifications,
-    verification_handler::handle_verification_request,
-};
+use crate::{auth_processor::AuthRequest, verification_handler::handle_verification_request};
 
 const SOCKET_PATH: &str = "/run/wrist-hello/auth.sock";
 
 #[derive(Clone)]
 pub struct ServerContext {
-    pub challenge_trigger: Arc<Notify>,
-    pub pending_notifications: PendingNotifications,
-    pub auth_session: AuthSession,
-    pub notify_ready: Arc<AtomicBool>,
+    pub add_queue_tx: mpsc::Sender<AuthRequest>,
 }
 
 pub struct SocketServer {
@@ -30,18 +24,8 @@ pub struct SocketServer {
 }
 
 impl SocketServer {
-    pub fn new(
-        challenge_trigger: Arc<Notify>,
-        pending_notifications: PendingNotifications,
-        auth_session: AuthSession,
-        notify_ready: Arc<AtomicBool>,
-    ) -> Self {
-        let ctx = ServerContext {
-            challenge_trigger,
-            pending_notifications,
-            auth_session,
-            notify_ready,
-        };
+    pub fn new(add_queue_tx: mpsc::Sender<AuthRequest>) -> Self {
+        let ctx = ServerContext { add_queue_tx };
         Self { ctx }
     }
 

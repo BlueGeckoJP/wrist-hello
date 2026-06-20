@@ -6,21 +6,18 @@ use p256::{
     ecdsa::{Signature, VerifyingKey},
     pkcs8::DecodePublicKey,
 };
+use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::{
-    RESPONSE_CHAR_UUID, auth_session::AuthSession, current_challenge::CurrentChallenge,
-    pending_notifications::PendingNotifications,
-};
+use crate::{RESPONSE_CHAR_UUID, auth_processor::AuthResult, current_challenge::CurrentChallenge};
 
 const DENY_RESPONSE_MARKER: u8 = 0x00;
 
 /// Generates the GATT characteristic for the authentication challenge response
 pub fn generate_response_char(
     current_challenge: CurrentChallenge,
-    pending_notifications: PendingNotifications,
-    auth_session: AuthSession,
     public_key_der_bytes: Vec<u8>,
+    wrist_result_tx: mpsc::Sender<AuthResult>,
 ) -> Characteristic {
     Characteristic {
         uuid: RESPONSE_CHAR_UUID,
@@ -34,8 +31,7 @@ pub fn generate_response_char(
                     new_value.clone(),
                     current_challenge.clone(),
                     public_key_der_bytes.clone(),
-                    pending_notifications.clone(),
-                    auth_session.clone(),
+                    wrist_result_tx.clone(),
                 ))
             })),
             ..Default::default()
@@ -50,12 +46,14 @@ pub fn generate_response_char(
 /// challenge is treated as an explicit deny response from the
 /// wearos-app client. Otherwise, the value is treated as a DER-encoded ECDSA
 /// signature and verified against the current challenge
+///
+/// This handler only classifies/verifies the write and forwards an `AuthResult`.
+/// `AuthProcessor` owns the final request decision and consumes the matching challenge.
 async fn handle_response_write(
     new_value: Vec<u8>,
     current_challenge: CurrentChallenge,
     public_key_der_bytes: Vec<u8>,
-    pending_notifications: PendingNotifications,
-    auth_session: AuthSession,
+    wrist_result_tx: mpsc::Sender<AuthResult>,
 ) -> Result<(), ReqError> {
     if new_value.first() == Some(&DENY_RESPONSE_MARKER) {
         if new_value.len() != 1 + 32 {
@@ -63,31 +61,19 @@ async fn handle_response_write(
             return Err(ReqError::Failed);
         }
 
-        match current_challenge.take_if_matches(&new_value[1..]) {
-            Ok(true) => {}
-            Ok(false) => {
-                error!("Error: Deny response challenge does not match current challenge");
-                return Err(ReqError::Failed);
-            }
-            Err(e) => {
-                error!(
-                    "Error: Failed to get current challenge for deny response: {}",
-                    e
-                );
-                return Err(ReqError::Failed);
-            }
+        if let Err(e) = wrist_result_tx
+            .send(AuthResult::Denied {
+                challenge: new_value[1..].try_into().unwrap(),
+            })
+            .await
+        {
+            error!("Error: Failed to send deny result: {}", e);
         }
 
-        pending_notifications.fail_all().map_err(|e| {
-            error!("Error: Failed to fail pending notifications: {}", e);
-            ReqError::Failed
-        })?;
-
-        info!("Authentication denied by client");
         return Ok(());
     }
 
-    let challenge = match current_challenge.take() {
+    let challenge = match current_challenge.peek() {
         Ok(ch) => ch,
         Err(e) => {
             error!("Error: Failed to get current challenge: {}", e);
@@ -115,20 +101,11 @@ async fn handle_response_write(
         Ok(_) => {
             info!("Success");
 
-            match auth_session.mark_verified() {
-                Ok(_) => info!("Marked session as verified"),
-                Err(e) => {
-                    error!("Error: Failed to mark session as verified: {}", e);
-                    return Err(ReqError::Failed);
-                }
-            }
-
-            match pending_notifications.notify_all() {
-                Ok(count) => info!("Notified {} pending notifications", count),
-                Err(e) => {
-                    error!("Error: Failed to notify pending notifications: {}", e);
-                    return Err(ReqError::Failed);
-                }
+            if let Err(e) = wrist_result_tx
+                .send(AuthResult::Success { challenge })
+                .await
+            {
+                error!("Error: Failed to send success result: {}", e);
             }
 
             Ok(())

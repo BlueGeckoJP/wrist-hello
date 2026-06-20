@@ -13,25 +13,28 @@
 #include <stddef.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <sys/un.h>
 #include <syslog.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "common.h"
 
 #define SOCKET_PATH "/run/wrist-hello/auth.sock"
 #define BUF_SIZE 256
-#define AUTH_TIMEOUT_SECONDS 30
+#define SOCKET_POLL_INTERVAL_MILLIS 100
+#define AUTH_TIMEOUT_SECONDS 90
 
 typedef enum {
     WRIST_AUTH_SUCCESS,
     WRIST_AUTH_FAILURE,
     WRIST_AUTH_CANCELLED,
+    WRIST_AUTH_TIMEOUT,
     WRIST_OPEN_SOCKET_ERROR,
     WRIST_WRITE_SOCKET_ERROR,
     WRIST_SOCKET_CLOSED_ERROR,
     WRIST_READ_SOCKET_ERROR,
+    WRIST_GET_TIME_ERROR,
 } WristResultCode;
 
 typedef enum { WRIST_RUNNING, WRIST_SUCCESS, WRIST_FAILED } WristState;
@@ -84,11 +87,6 @@ int open_socket(const char* socket_path) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
 
-    struct timeval tv;
-    tv.tv_sec = AUTH_TIMEOUT_SECONDS;
-    tv.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
     struct sockaddr_un addr = {
         .sun_family = AF_UNIX,
     };
@@ -100,6 +98,15 @@ int open_socket(const char* socket_path) {
     }
 
     return fd;
+}
+
+static int64_t monotonic_now_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return -1;
+    }
+
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 WristResultCode handle_wrist_authentication(AuthIdentity* identity, int cancel_fd) {
@@ -129,16 +136,38 @@ WristResultCode handle_wrist_authentication(AuthIdentity* identity, int cancel_f
         remaining -= (size_t)n;
     }
 
+    int64_t started_ms = monotonic_now_ms();
+    if (started_ms < 0) {
+        close(fd);
+        return WRIST_GET_TIME_ERROR;
+    }
+
+    int64_t deadline_ms = started_ms + (int64_t)AUTH_TIMEOUT_SECONDS * 1000;
     while (true) {
+        int64_t now_ms = monotonic_now_ms();
+        if (now_ms < 0) {
+            close(fd);
+            return WRIST_GET_TIME_ERROR;
+        }
+
+        if (now_ms >= deadline_ms) {
+            close(fd);
+            return WRIST_AUTH_TIMEOUT;
+        }
+
+        int remaining_ms = (int)(deadline_ms - now_ms);
+        if (remaining_ms > SOCKET_POLL_INTERVAL_MILLIS) {
+            remaining_ms = SOCKET_POLL_INTERVAL_MILLIS;
+        }
+
         struct pollfd fds[2] = {
             {.fd = fd, .events = POLLIN},
             {.fd = cancel_fd, .events = POLLIN},
         };
 
-        int poll_result = poll(fds, 2, AUTH_TIMEOUT_SECONDS * 1000);
+        int poll_result = poll(fds, 2, remaining_ms);
         if (poll_result == 0) {
-            close(fd);
-            return WRIST_AUTH_FAILURE;
+            continue;
         }
 
         if (poll_result < 0) {
@@ -149,6 +178,16 @@ WristResultCode handle_wrist_authentication(AuthIdentity* identity, int cancel_f
         }
 
         if (fds[1].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL)) {
+            uint8_t msg = AUTH_MSG_PAM_CANCELLED;
+            while (true) {
+                ssize_t n = write(fd, &msg, sizeof(msg));
+
+                if (n == (ssize_t)sizeof(msg)) break;
+                if (n < 0 && errno == EINTR) continue;
+
+                break;
+            }
+
             close(fd);
             return WRIST_AUTH_CANCELLED;
         }
@@ -184,6 +223,9 @@ static void print_wrist_result(pam_handle_t* pamh, const char* user, WristResult
         case WRIST_AUTH_CANCELLED:
             pam_syslog(pamh, LOG_ERR, "Authentication cancelled: user=%s", user);
             break;
+        case WRIST_AUTH_TIMEOUT:
+            pam_syslog(pamh, LOG_ERR, "Authentication timed out: user=%s", user);
+            break;
         case WRIST_OPEN_SOCKET_ERROR:
             pam_syslog(pamh, LOG_ERR, "Failed to open socket: user=%s", user);
             break;
@@ -195,6 +237,9 @@ static void print_wrist_result(pam_handle_t* pamh, const char* user, WristResult
             break;
         case WRIST_READ_SOCKET_ERROR:
             pam_syslog(pamh, LOG_ERR, "Failed to read from socket: user=%s", user);
+            break;
+        case WRIST_GET_TIME_ERROR:
+            pam_syslog(pamh, LOG_ERR, "Failed to get current time: user=%s", user);
             break;
     }
 }

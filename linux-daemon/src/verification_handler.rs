@@ -1,93 +1,94 @@
-use std::{mem::MaybeUninit, sync::atomic::Ordering, time::Duration};
+use std::mem::MaybeUninit;
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
-    sync::oneshot,
-    time::timeout,
+    sync::{mpsc, oneshot},
 };
 use tracing::{error, info, warn};
 
-use crate::{
-    AUTH_IDENTITY_SIZE, bindings, pending_notifications::AuthResult, socket_server::ServerContext,
-};
-
-const AUTH_TIMEOUT_SECONDS: u64 = 30;
+use crate::{AUTH_IDENTITY_SIZE, bindings, socket_server::ServerContext};
 
 pub async fn handle_verification_request(server: &ServerContext, stream: &mut UnixStream) {
     let auth_identity = match receive_auth_identity(stream).await {
         Ok(identity) => identity,
         Err(e) => {
-            eprintln!("Failed to receive AuthIdentity: {}", e);
+            error!("Failed to receive AuthIdentity: {}", e);
             return;
         }
     };
 
-    if let Ok(true) = server.auth_session.is_verified() {
-        info!("Session already verified, skipping verification");
-        if let Err(e) = reply_to_stream(stream, &[0u8]).await {
-            error!("Failed to send already verified response to client: {}", e);
-        }
+    let (result_tx, mut result_rx) = mpsc::channel(1);
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    if let Err(e) = server
+        .add_queue_tx
+        .send(crate::auth_processor::AuthRequest {
+            identity: auth_identity,
+            result_tx,
+            cancel_rx,
+        })
+        .await
+    {
+        error!("Failed to send AuthRequest to AuthProcessor: {}", e);
         return;
     }
 
-    let (notify_tx, notify_rx) = oneshot::channel();
-    let notify_id = match server.pending_notifications.add_one(notify_tx) {
-        Ok(id) => id,
+    tokio::select! {
+        biased;
+
+        cancel = read_cancel_from_stream(stream) => {
+            let cancel = cancel.unwrap_or_else(|e| {
+                warn!("Failed to read cancel signal from client: {}", e);
+                0
+            });
+
+            if cancel as u32 != bindings::AUTH_MSG_PAM_CANCELLED {
+                warn!("Received unexpected cancel signal from client: {}", cancel);
+                return;
+            }
+
+            let _ = cancel_tx.send(());
+            info!("Received cancel signal from client, cancelling authentication request");
+        }
+
+        result = result_rx.recv() => {
+            let verified = result.unwrap_or_else(|| {
+                warn!("AuthProcessor dropped the result channel without sending a response");
+                false
+            });
+
+            let response = if verified { [0u8] } else { [1u8] };
+
+            if let Err(e) = reply_to_stream(stream, &response).await {
+                error!(
+                    "Failed to send response to client: response={:?}, error={}",
+                    response, e
+                );
+            }
+
+            if verified {
+                info!(
+                    "Verified client: uid={}, tty={}, service={}",
+                    auth_identity.uid,
+                    c_bytes_to_string(&auth_identity.tty),
+                    c_bytes_to_string(&auth_identity.service)
+                );
+            }
+        }
+    }
+}
+
+async fn read_cancel_from_stream(stream: &mut UnixStream) -> eyre::Result<u8> {
+    let mut buf = [0u8; 1];
+    match stream.read_exact(&mut buf).await {
+        Ok(0) => {
+            eyre::bail!("Client disconnected");
+        }
+        Ok(_) => Ok(buf[0]),
         Err(e) => {
-            error!("Failed to add notify to pending notifications: {}", e);
-            return;
+            eyre::bail!("Failed to read cancel signal from client: {}", e);
         }
-    };
-
-    let verified = if !server.notify_ready.load(Ordering::SeqCst) {
-        error!("Notify not ready, cannot process verification request");
-        false
-    } else {
-        info!("Triggering challenge for verification request");
-        server.challenge_trigger.notify_one();
-
-        match timeout(Duration::from_secs(AUTH_TIMEOUT_SECONDS), notify_rx).await {
-            Ok(Ok(AuthResult::Success)) => {
-                info!("Received successful verification notification");
-                true
-            }
-            Ok(Ok(AuthResult::Denied)) => {
-                warn!("Received denied verification notification");
-                false
-            }
-            Ok(Err(e)) => {
-                error!("Failed to receive verification notification: {}", e);
-                false
-            }
-            Err(e) => {
-                error!("Failed to wait for verification notification: {}", e);
-                false
-            }
-        }
-    };
-
-    if let Err(e) = server.pending_notifications.remove_one(&notify_id) {
-        error!("Failed to remove notify from pending notifications: {}", e);
     }
-
-    if !verified {
-        if let Err(e) = reply_to_stream(stream, &[1u8]).await {
-            error!("Failed to send failure response to client: {}", e);
-        }
-        return;
-    }
-
-    if let Err(e) = reply_to_stream(stream, &[0u8]).await {
-        error!("Failed to send success response to client: {}", e);
-    }
-
-    info!(
-        "Verified client: uid={}, tty={}, service={}",
-        auth_identity.uid,
-        c_bytes_to_string(&auth_identity.tty),
-        c_bytes_to_string(&auth_identity.service)
-    );
 }
 
 async fn receive_auth_identity(stream: &mut UnixStream) -> eyre::Result<bindings::AuthIdentity> {

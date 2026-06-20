@@ -14,8 +14,8 @@ use crate::{
 /// Generates the GATT characteristic for the authentication challenge
 pub fn generate_challenge_char(
     current_challenge: CurrentChallenge,
-    challenge_trigger: Arc<Notify>,
     notify_ready: Arc<AtomicBool>,
+    wrist_start_notify: Arc<Notify>,
 ) -> Characteristic {
     let challenge_for_read = current_challenge.clone();
     let challenge_for_notify = current_challenge.clone();
@@ -35,11 +35,11 @@ pub fn generate_challenge_char(
             notify: true,
             method: CharacteristicNotifyMethod::Fun(Box::new(move |notifier| {
                 let challenge_for_notify = challenge_for_notify.clone();
-                let challenge_trigger = challenge_trigger.clone();
+                let wrist_start_notify = wrist_start_notify.clone();
                 Box::pin(handle_challenge_notify(
                     notifier,
                     challenge_for_notify,
-                    challenge_trigger,
+                    wrist_start_notify,
                     notify_ready.clone(),
                 ))
             })),
@@ -60,28 +60,30 @@ async fn handle_challenge_read(current_challenge: CurrentChallenge) -> Result<Ve
     Ok(new_challenge.to_vec())
 }
 
-/// Handles notifications for the challenge characteristic by generating a new challenge and sending it to the wearos-app client
-/// Notifications to the wearos-app client are triggered via `challenge_trigger: Arc<Notify>`
+/// Handles notifications for the challenge characteristic by sending
+/// the challenge updated by the AuthProcessor to the wearos-app client.
+/// Notifications to the wearos-app client are triggered via
+/// `wrist_start_notify: Arc<Notify>`
 async fn handle_challenge_notify(
     mut notifier: CharacteristicNotifier,
     current_challenge: CurrentChallenge,
-    challenge_trigger: Arc<Notify>,
+    wrist_start_notify: Arc<Notify>,
     notify_ready: Arc<AtomicBool>,
 ) {
     let _ready_guard = NotifyReadyGuard::new(notify_ready);
 
     loop {
-        challenge_trigger.notified().await;
-        let new_challenge = match current_challenge.refresh() {
+        wrist_start_notify.notified().await;
+        let challenge = match current_challenge.peek() {
             Ok(ch) => ch.to_vec(),
             Err(e) => {
-                error!("NOTIFY: Failed to refresh challenge: {}", e);
+                error!("NOTIFY: Failed to peek challenge: {}", e);
                 return;
             }
         };
 
-        info!("NOTIFY: Re-triggered challenge: {:?}", new_challenge);
-        if notifier.notify(new_challenge).await.is_err() {
+        info!("NOTIFY: Re-triggered challenge: {:?}", challenge);
+        if notifier.notify(challenge).await.is_err() {
             error!("NOTIFY: Failed to send notification");
             break;
         }
