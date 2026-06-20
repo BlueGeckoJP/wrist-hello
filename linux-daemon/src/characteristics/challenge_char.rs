@@ -60,8 +60,10 @@ async fn handle_challenge_read(current_challenge: CurrentChallenge) -> Result<Ve
     Ok(new_challenge.to_vec())
 }
 
-/// Handles notifications for the challenge characteristic by generating a new challenge and sending it to the wearos-app client
-/// Notifications to the wearos-app client are triggered via `wrist_start_notify: Arc<Notify>`
+/// Handles notifications for the challenge characteristic by sending
+/// the challenge updated by the AuthProcessor to the wearos-app client.
+/// Notifications to the wearos-app client are triggered via
+/// `wrist_start_notify: Arc<Notify>`
 async fn handle_challenge_notify(
     mut notifier: CharacteristicNotifier,
     current_challenge: CurrentChallenge,
@@ -72,16 +74,16 @@ async fn handle_challenge_notify(
 
     loop {
         wrist_start_notify.notified().await;
-        let new_challenge = match current_challenge.refresh() {
+        let challenge = match current_challenge.peek() {
             Ok(ch) => ch.to_vec(),
             Err(e) => {
-                error!("NOTIFY: Failed to refresh challenge: {}", e);
+                error!("NOTIFY: Failed to peek challenge: {}", e);
                 return;
             }
         };
 
-        info!("NOTIFY: Re-triggered challenge: {:?}", new_challenge);
-        if notifier.notify(new_challenge).await.is_err() {
+        info!("NOTIFY: Re-triggered challenge: {:?}", challenge);
+        if notifier.notify(challenge).await.is_err() {
             error!("NOTIFY: Failed to send notification");
             break;
         }
