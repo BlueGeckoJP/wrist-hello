@@ -22,8 +22,8 @@ use tracing::{error, info};
 use xdg::BaseDirectories;
 
 use crate::{
-    advertisement_handle::advertise_service, auth_session::AuthSession,
-    current_challenge::CurrentChallenge, socket_server::SocketServer,
+    advertisement_handle::advertise_service, auth_processor::AuthProcessorContext,
+    auth_session::AuthSession, current_challenge::CurrentChallenge, socket_server::SocketServer,
 };
 
 const SERVICE_UUID: Uuid = Uuid::from_u128(0xddc6ea97_db6e_4ecd_a3ff_0143368ef829);
@@ -100,15 +100,17 @@ async fn main() -> eyre::Result<()> {
     let (wrist_result_tx, wrist_result_rx) = mpsc::channel(1);
     let (cancel_notify_tx, cancel_notify_rx) = mpsc::channel(1);
 
-    let auth_processor = auth_processor::AuthProcessor::new(
+    let auth_processor = auth_processor::AuthProcessor::new(AuthProcessorContext {
         add_queue_rx,
-        wrist_start_notify.clone(),
         wrist_result_rx,
-        auth_session.clone(),
-        current_challenge.clone(),
-        notify_ready.clone(),
         cancel_notify_tx,
-    );
+        wrist_start_notify: wrist_start_notify.clone(),
+        notify_ready: notify_ready.clone(),
+        cancel_notify_ready: cancel_notify_ready.clone(),
+        queue: std::collections::VecDeque::new(),
+        auth_session,
+        current_challenge: current_challenge.clone(),
+    });
     auth_processor.spawn();
 
     let app = Application {

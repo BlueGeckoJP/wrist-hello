@@ -36,57 +36,45 @@ pub struct AuthRequest {
     pub cancel_rx: oneshot::Receiver<()>,
 }
 
+pub struct AuthProcessorContext {
+    pub add_queue_rx: mpsc::Receiver<AuthRequest>,
+    pub wrist_result_rx: mpsc::Receiver<AuthResult>,
+    pub cancel_notify_tx: mpsc::Sender<[u8; 32]>,
+
+    pub wrist_start_notify: Arc<Notify>,
+
+    pub notify_ready: Arc<AtomicBool>,
+    pub cancel_notify_ready: Arc<AtomicBool>,
+
+    pub queue: VecDeque<AuthRequest>,
+
+    pub auth_session: AuthSession,
+    pub current_challenge: CurrentChallenge,
+}
+
 pub struct AuthProcessor {
-    add_queue_rx: mpsc::Receiver<AuthRequest>,
-    wrist_result_rx: mpsc::Receiver<AuthResult>,
-    cancel_notify_tx: mpsc::Sender<[u8; 32]>,
-
-    wrist_start_notify: Arc<Notify>,
-
-    current_challenge: CurrentChallenge,
-
-    queue: VecDeque<AuthRequest>,
-
-    auth_session: AuthSession,
-    notify_ready: Arc<AtomicBool>,
+    ctx: AuthProcessorContext,
 }
 
 impl AuthProcessor {
-    pub fn new(
-        add_queue_rx: mpsc::Receiver<AuthRequest>,
-        wrist_start_notify: Arc<Notify>,
-        wrist_result_rx: mpsc::Receiver<AuthResult>,
-        auth_session: AuthSession,
-        current_challenge: CurrentChallenge,
-        notify_ready: Arc<AtomicBool>,
-        cancel_notify_tx: mpsc::Sender<[u8; 32]>,
-    ) -> Self {
-        Self {
-            add_queue_rx,
-            wrist_start_notify,
-            wrist_result_rx,
-            current_challenge,
-            queue: VecDeque::new(),
-            auth_session,
-            notify_ready,
-            cancel_notify_tx,
-        }
+    pub fn new(ctx: AuthProcessorContext) -> Self {
+        Self { ctx }
     }
 
     pub fn spawn(mut self) {
         tokio::spawn(async move {
             loop {
-                let incoming_request = if self.queue.is_empty() {
-                    match self.add_queue_rx.recv().await {
+                let incoming_request = if self.ctx.queue.is_empty() {
+                    match self.ctx.add_queue_rx.recv().await {
                         Some(req) => Some(req),
                         None => break,
                     }
                 } else {
-                    self.add_queue_rx.try_recv().ok()
+                    self.ctx.add_queue_rx.try_recv().ok()
                 };
 
                 if let Some(req) = incoming_request {
-                    if (self.queue.iter().find(|r| r.identity == req.identity)).is_some() {
+                    if (self.ctx.queue.iter().find(|r| r.identity == req.identity)).is_some() {
                         info!(
                             "Received duplicate AuthRequest for uid={}, ignoring",
                             req.identity.uid
@@ -94,16 +82,16 @@ impl AuthProcessor {
                         req.result_tx.send(false).await.ok();
                         continue;
                     }
-                    self.queue.push_back(req);
+                    self.ctx.queue.push_back(req);
 
                     info!(
                         "Queued AuthRequest for uid={}, queue length={}",
-                        self.queue.back().unwrap().identity.uid,
-                        self.queue.len()
+                        self.ctx.queue.back().unwrap().identity.uid,
+                        self.ctx.queue.len()
                     );
                 }
 
-                let mut request = match self.queue.pop_front() {
+                let mut request = match self.ctx.queue.pop_front() {
                     Some(req) => req,
                     None => continue,
                 };
@@ -134,25 +122,27 @@ impl AuthProcessor {
     }
 
     async fn handle_verification(&mut self, cancel_rx: &mut oneshot::Receiver<()>) -> Option<bool> {
-        if let Ok(true) = self.auth_session.is_verified() {
+        if let Ok(true) = self.ctx.auth_session.is_verified() {
             info!("Session already verified, skipping verification");
             return Some(true);
         }
 
-        if !self.notify_ready.load(Ordering::SeqCst) {
+        if !self.ctx.notify_ready.load(Ordering::SeqCst)
+            || !self.ctx.cancel_notify_ready.load(Ordering::SeqCst)
+        {
             error!("Notify not ready, cannot process verification request");
             return Some(false);
         }
 
         self.drain_stale_wrist_results();
 
-        if let Err(e) = self.current_challenge.refresh() {
+        if let Err(e) = self.ctx.current_challenge.refresh() {
             error!("Failed to refresh challenge: {}, skipping this request", e);
             return Some(false);
         }
 
         info!("Triggering challenge for verification request");
-        self.wrist_start_notify.notify_one();
+        self.ctx.wrist_start_notify.notify_one();
 
         tokio::select! {
             biased;
@@ -160,7 +150,7 @@ impl AuthProcessor {
             _ = cancel_rx => {
                 info!("AuthRequest cancelled while in progress");
 
-                let challenge = match self.current_challenge.peek() {
+                let challenge = match self.ctx.current_challenge.peek() {
                     Ok(challenge) => challenge,
                     Err(e) => {
                         error!("Failed to peek current challenge: {}, cannot send cancel notification to wrist", e);
@@ -168,7 +158,7 @@ impl AuthProcessor {
                     }
                 };
 
-                if let Err(e) = self.cancel_notify_tx.send(challenge).await {
+                if let Err(e) = self.ctx.cancel_notify_tx.send(challenge).await {
                     error!("Failed to send cancel notification to wrist: {}", e);
                 }
 
@@ -177,7 +167,7 @@ impl AuthProcessor {
 
             result = timeout(
                 Duration::from_secs(AUTH_TIMEOUT_SECONDS),
-                self.wrist_result_rx.recv(),
+                self.ctx.wrist_result_rx.recv(),
             ) => {
                 Some(self.handle_wrist_result(result).await)
             }
@@ -187,7 +177,7 @@ impl AuthProcessor {
     fn drain_stale_wrist_results(&mut self) {
         let mut drained = 0;
 
-        while self.wrist_result_rx.try_recv().is_ok() {
+        while self.ctx.wrist_result_rx.try_recv().is_ok() {
             drained += 1;
         }
 
@@ -201,13 +191,13 @@ impl AuthProcessor {
             Ok(Some(AuthResult::Success { challenge })) => {
                 info!("Received successful verification notification");
 
-                match self.current_challenge.take_if_matches(&challenge) {
+                match self.ctx.current_challenge.take_if_matches(&challenge) {
                     Ok(true) => {
                         info!(
                             "Challenge in verification notification matches current challenge, treating as successful verification"
                         );
 
-                        if let Err(e) = self.auth_session.mark_verified() {
+                        if let Err(e) = self.ctx.auth_session.mark_verified() {
                             error!("Failed to mark session as verified: {}", e);
                             return false;
                         }
@@ -232,7 +222,7 @@ impl AuthProcessor {
             Ok(Some(AuthResult::Denied { challenge })) => {
                 info!("Received denied verification notification");
 
-                match self.current_challenge.take_if_matches(&challenge) {
+                match self.ctx.current_challenge.take_if_matches(&challenge) {
                     Ok(true) => {
                         info!(
                             "Challenge in denied verification notification matches current challenge, treating as explicit denial"
